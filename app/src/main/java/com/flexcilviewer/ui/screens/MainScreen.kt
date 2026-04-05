@@ -5,7 +5,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -40,10 +39,12 @@ fun MainScreen(
     val drawerState = rememberDrawerState(DrawerValue.Open)
 
     val selectedDoc by viewModel.selectedDocument.collectAsState()
+    val selectedDocFolderPath by viewModel.selectedDocFolderPath.collectAsState()
     val selectedFolder by viewModel.selectedFolder.collectAsState()
     val checkedDocs by viewModel.checkedDocs.collectAsState()
     val exportState by viewModel.exportState.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     var showExportDialog by remember { mutableStateOf(false) }
     var exportTarget by remember { mutableStateOf<List<Pair<FlexDocument, String>>>(emptyList()) }
@@ -53,10 +54,11 @@ fun MainScreen(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
         if (uri != null) {
-            if (pendingExportMode == "zip") {
-                viewModel.exportAsZip(context, uri, exportTarget)
-            } else {
-                viewModel.exportToFolder(context, uri, exportTarget)
+            when (pendingExportMode) {
+                "zip"      -> viewModel.exportAsZip(context, uri, exportTarget)
+                "previews" -> viewModel.exportPreviewsAsZip(context, uri, exportTarget)
+                "all"      -> viewModel.exportAllAsZip(context, uri, exportTarget)
+                else       -> viewModel.exportToFolder(context, uri, exportTarget)
             }
         }
     }
@@ -81,8 +83,8 @@ fun MainScreen(
                     checkedDocs = checkedDocs,
                     searchQuery = searchQuery,
                     onSearchQueryChange = { viewModel.setSearchQuery(it) },
-                    onDocClick = { doc ->
-                        viewModel.selectDocument(doc)
+                    onDocClick = { doc, path ->
+                        viewModel.selectDocument(doc, path)
                         scope.launch { drawerState.close() }
                     },
                     onFolderClick = { folder -> viewModel.selectFolder(folder) },
@@ -143,6 +145,7 @@ fun MainScreen(
                     )
                 )
             },
+            snackbarHost = { SnackbarHost(snackbarHostState) },
             containerColor = BackgroundDark
         ) { paddingValues ->
             Box(
@@ -154,6 +157,7 @@ fun MainScreen(
                     selectedDoc != null -> {
                         DocumentViewer(
                             doc = selectedDoc!!,
+                            folderPath = selectedDocFolderPath,
                             onExportClick = {
                                 val allDocs = getAllDocuments(rootFolders)
                                 val docEntry = allDocs.find { it.first.name == selectedDoc!!.name }
@@ -165,7 +169,11 @@ fun MainScreen(
                     selectedFolder != null -> {
                         FolderOverview(
                             folder = selectedFolder!!,
-                            onDocClick = { viewModel.selectDocument(it) },
+                            onDocClick = { doc ->
+                                val allDocs = getAllDocuments(listOf(selectedFolder!!))
+                                val entry = allDocs.find { it.first.name == doc.name }
+                                viewModel.selectDocument(doc, entry?.second ?: selectedFolder!!.fullPath)
+                            },
                             onExportFolder = {
                                 val docs = getAllDocuments(listOf(selectedFolder!!))
                                 openExportFor(docs)
@@ -193,8 +201,18 @@ fun MainScreen(
                 showExportDialog = false
                 folderPickerLauncher.launch(null)
             },
-            onExportAsZip = {
+            onExportPdfsZip = {
                 pendingExportMode = "zip"
+                showExportDialog = false
+                folderPickerLauncher.launch(null)
+            },
+            onExportPreviewsZip = {
+                pendingExportMode = "previews"
+                showExportDialog = false
+                folderPickerLauncher.launch(null)
+            },
+            onExportAllZip = {
+                pendingExportMode = "all"
                 showExportDialog = false
                 folderPickerLauncher.launch(null)
             }
@@ -202,7 +220,6 @@ fun MainScreen(
     }
 
     // Export result snackbar
-    val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(exportState) {
         when (val state = exportState) {
             is ExportState.Done -> {
@@ -227,11 +244,24 @@ private fun WelcomeContent(totalDocuments: Int, modifier: Modifier = Modifier) {
     ) {
         Icon(Icons.Default.TouchApp, contentDescription = null, tint = TextMuted, modifier = Modifier.size(56.dp))
         Spacer(Modifier.height(16.dp))
-        Text("Select a document", style = MaterialTheme.typography.headlineMedium, color = TextSecondary, fontWeight = FontWeight.Medium)
+        Text(
+            "Select a document",
+            style = MaterialTheme.typography.headlineMedium,
+            color = TextSecondary,
+            fontWeight = FontWeight.Medium
+        )
         Spacer(Modifier.height(8.dp))
-        Text("Tap a document in the sidebar to view it, or tap a folder to see its contents", style = MaterialTheme.typography.bodyMedium, color = TextMuted)
+        Text(
+            "Tap a document in the sidebar to view it, or tap a folder to see its contents",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextMuted
+        )
         Spacer(Modifier.height(8.dp))
-        Text("$totalDocuments documents loaded", style = MaterialTheme.typography.labelLarge, color = PrimaryIndigoLight)
+        Text(
+            "$totalDocuments documents loaded",
+            style = MaterialTheme.typography.labelLarge,
+            color = PrimaryIndigoLight
+        )
     }
 }
 
@@ -245,7 +275,12 @@ private fun FolderOverview(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.FolderOpen, contentDescription = null, tint = PrimaryIndigoLight)
             Spacer(Modifier.width(10.dp))
-            Text(folder.name, style = MaterialTheme.typography.titleLarge, color = TextPrimary, modifier = Modifier.weight(1f))
+            Text(
+                folder.name,
+                style = MaterialTheme.typography.titleLarge,
+                color = TextPrimary,
+                modifier = Modifier.weight(1f)
+            )
             IconButton(onClick = onExportFolder) {
                 Icon(Icons.Default.FileDownload, contentDescription = "Export folder", tint = PrimaryIndigoLight)
             }
@@ -258,7 +293,10 @@ private fun FolderOverview(
         Spacer(Modifier.height(12.dp))
         HorizontalDivider(color = DividerColor)
         Spacer(Modifier.height(12.dp))
-
-        Text("Tap a document in the sidebar to view it", style = MaterialTheme.typography.bodyMedium, color = TextMuted)
+        Text(
+            "Tap a document in the sidebar to view it",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextMuted
+        )
     }
 }

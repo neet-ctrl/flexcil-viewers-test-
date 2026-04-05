@@ -33,12 +33,15 @@ private enum class ViewerTab(val label: String, val icon: androidx.compose.ui.gr
 @Composable
 fun DocumentViewer(
     doc: FlexDocument,
+    folderPath: String = "",
     onExportClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember(doc) {
         mutableStateOf(if (doc.pdfData != null) ViewerTab.PDF else ViewerTab.DETAILS)
     }
+    var copiedName by remember { mutableStateOf(false) }
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
 
     Column(modifier = modifier.background(BackgroundDark)) {
         // Top bar
@@ -49,24 +52,64 @@ fun DocumentViewer(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
+                    .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
+                    if (folderPath.isNotBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.Folder, contentDescription = null, tint = TextMuted, modifier = Modifier.size(12.dp))
+                            Text(
+                                text = folderPath,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                     Text(
-                        text = doc.name,
+                        text = doc.info?.name?.takeIf { it.isNotBlank() } ?: doc.name,
                         style = MaterialTheme.typography.titleMedium,
                         color = TextPrimary,
                         maxLines = 2
                     )
                     doc.info?.let {
-                        Text(
-                            text = "Modified: ${formatDate(it.modifiedDate)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary
-                        )
+                        if (it.modifiedDate > 0) {
+                            Text(
+                                text = "Modified: ${formatDate(it.modifiedDate)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
+                            )
+                        }
                     }
                 }
+                // Copy name button
+                IconButton(
+                    onClick = {
+                        clipboardManager.setText(
+                            androidx.compose.ui.text.AnnotatedString(doc.info?.name?.takeIf { it.isNotBlank() } ?: doc.name)
+                        )
+                        copiedName = true
+                    }
+                ) {
+                    Icon(
+                        if (copiedName) Icons.Default.Check else Icons.Default.ContentCopy,
+                        contentDescription = "Copy name",
+                        tint = if (copiedName) AccentGreen else TextMuted,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                LaunchedEffect(copiedName) {
+                    if (copiedName) {
+                        kotlinx.coroutines.delay(2000)
+                        copiedName = false
+                    }
+                }
+                // Export button
                 IconButton(onClick = onExportClick) {
                     Icon(Icons.Default.FileDownload, contentDescription = "Export", tint = PrimaryIndigoLight)
                 }

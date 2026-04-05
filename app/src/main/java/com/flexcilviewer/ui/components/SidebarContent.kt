@@ -42,7 +42,7 @@ fun SidebarContent(
     checkedDocs: Set<String>,
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
-    onDocClick: (FlexDocument) -> Unit,
+    onDocClick: (FlexDocument, String) -> Unit,
     onFolderClick: (FolderNode) -> Unit,
     onCheckToggle: (String) -> Unit,
     onCheckAll: (FolderNode) -> Unit,
@@ -199,7 +199,7 @@ private fun FolderTreeNode(
     selectedDoc: FlexDocument?,
     selectedFolder: FolderNode?,
     checkedDocs: Set<String>,
-    onDocClick: (FlexDocument) -> Unit,
+    onDocClick: (FlexDocument, String) -> Unit,
     onFolderClick: (FolderNode) -> Unit,
     onCheckToggle: (String) -> Unit,
     onCheckAll: (FolderNode) -> Unit
@@ -296,7 +296,7 @@ private fun DocumentRow(
     indent: Dp,
     isSelected: Boolean,
     isChecked: Boolean,
-    onDocClick: (FlexDocument) -> Unit,
+    onDocClick: (FlexDocument, String) -> Unit,
     onCheckToggle: () -> Unit
 ) {
     val thumbBitmap = remember(doc.thumbnail) {
@@ -308,7 +308,7 @@ private fun DocumentRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onDocClick(doc) }
+            .clickable { onDocClick(doc, folderPath) }
             .background(if (isSelected) SelectedBg else SurfaceDark)
             .padding(start = indent, end = 8.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically

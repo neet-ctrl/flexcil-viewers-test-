@@ -44,6 +44,15 @@ jobs:
         with:
           gradle-version: "8.7"
 
+      # ── 3b. Regenerate Gradle Wrapper JAR ──────────────────────────────────
+      # gradle-wrapper.jar is not committed to the repo, so we use the Gradle
+      # binary installed by setup-gradle above to regenerate it before building.
+      - name: Regenerate Gradle Wrapper JAR
+        run: |
+          gradle wrapper --gradle-version 8.7 --distribution-type bin
+          chmod +x gradlew
+          echo "✅ Wrapper JAR: $(ls -lh gradle/wrapper/gradle-wrapper.jar)"
+
       # ── 4. Android SDK ─────────────────────────────────────────────────────
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -51,11 +60,7 @@ jobs:
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses || true
 
-      # ── 5. Make gradlew executable ─────────────────────────────────────────
-      - name: Make gradlew executable
-        run: chmod +x gradlew
-
-      # ── 6. (Optional) override versionCode / versionName from inputs ───────
+      # ── 5. (Optional) override versionCode / versionName from inputs ───────
       - name: Apply version from workflow inputs
         if: github.event_name == 'workflow_dispatch'
         run: |
@@ -63,7 +68,7 @@ jobs:
           sed -i "s/versionName = \"[^\"]*\"/versionName = \"${{ github.event.inputs.version_name }}\"/" app/build.gradle.kts
           echo "Version set to ${{ github.event.inputs.version_name }} (${{ github.event.inputs.version_code }})"
 
-      # ── 7. Build Debug APK ─────────────────────────────────────────────────
+      # ── 6. Build Debug APK ─────────────────────────────────────────────────
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
         env:

@@ -22,8 +22,14 @@ fun ExportDialog(
     docs: List<Pair<FlexDocument, String>>,
     onDismiss: () -> Unit,
     onExportToFolder: () -> Unit,
-    onExportAsZip: () -> Unit
+    onExportPdfsZip: () -> Unit,
+    onExportPreviewsZip: () -> Unit,
+    onExportAllZip: () -> Unit
 ) {
+    val pdfDocs = docs.filter { it.first.pdfData != null }
+    val previewDocs = docs.filter { it.first.thumbnail != null }
+    val noPdfDocs = docs.filter { it.first.pdfData == null }
+
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(16.dp),
@@ -37,19 +43,32 @@ fun ExportDialog(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.FileDownload, contentDescription = null, tint = PrimaryIndigoLight)
                     Spacer(Modifier.width(10.dp))
-                    Text("Export ${docs.size} Document${if (docs.size == 1) "" else "s"}", style = MaterialTheme.typography.titleLarge, color = TextPrimary)
+                    Text(
+                        "Export ${docs.size} Document${if (docs.size == 1) "" else "s"}",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = TextPrimary
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // Summary stats
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    StatChip(icon = Icons.Default.PictureAsPdf, label = "${pdfDocs.size} PDFs", tint = PrimaryIndigoLight)
+                    StatChip(icon = Icons.Default.Image, label = "${previewDocs.size} Previews", tint = AccentGreen)
                 }
 
                 Spacer(Modifier.height(12.dp))
 
                 // Doc list
-                val pdfDocs = docs.filter { it.first.pdfData != null }
-                val noPdfDocs = docs.filter { it.first.pdfData == null }
-
                 if (pdfDocs.isNotEmpty()) {
-                    Text("PDFs to export (${pdfDocs.size}):", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
+                    Text(
+                        "PDFs to export (${pdfDocs.size}):",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = TextSecondary
+                    )
                     Spacer(Modifier.height(6.dp))
-                    LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
+                    LazyColumn(modifier = Modifier.heightIn(max = 160.dp)) {
                         items(pdfDocs) { (doc, folderPath) ->
                             Row(
                                 Modifier.padding(vertical = 4.dp),
@@ -58,8 +77,20 @@ fun ExportDialog(
                                 Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = AccentRed, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Column {
-                                    Text(doc.name, style = MaterialTheme.typography.bodyMedium, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(folderPath, style = MaterialTheme.typography.labelSmall, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        doc.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        folderPath,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
                             }
                         }
@@ -84,10 +115,10 @@ fun ExportDialog(
                     }
                 }
 
-                if (pdfDocs.isEmpty()) {
+                if (docs.isEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "None of the selected documents have embedded PDFs. Nothing will be exported.",
+                        "No documents selected.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AccentAmber
                     )
@@ -99,6 +130,7 @@ fun ExportDialog(
 
                 // Export buttons
                 if (pdfDocs.isNotEmpty()) {
+                    // Save to folder
                     Button(
                         onClick = onExportToFolder,
                         modifier = Modifier.fillMaxWidth(),
@@ -109,22 +141,73 @@ fun ExportDialog(
                         Text("Save PDFs to Folder")
                     }
                     Spacer(Modifier.height(8.dp))
+                    // PDFs ZIP
                     OutlinedButton(
-                        onClick = onExportAsZip,
+                        onClick = onExportPdfsZip,
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = PrimaryIndigoLight)
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = PrimaryIndigoLight),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, PrimaryIndigoDark)
+                    ) {
+                        Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("PDFs ZIP")
+                    }
+                }
+                if (previewDocs.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    // Previews ZIP
+                    OutlinedButton(
+                        onClick = onExportPreviewsZip,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentGreen),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, AccentGreen.copy(alpha = 0.5f))
+                    ) {
+                        Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Previews ZIP")
+                    }
+                }
+                if (pdfDocs.isNotEmpty() || previewDocs.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    // All as ZIP
+                    OutlinedButton(
+                        onClick = onExportAllZip,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentAmber),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, AccentAmber.copy(alpha = 0.5f))
                     ) {
                         Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Export as ZIP")
+                        Text("All as ZIP")
                     }
-                    Spacer(Modifier.height(8.dp))
                 }
 
+                Spacer(Modifier.height(8.dp))
                 TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                     Text("Cancel", color = TextSecondary)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun StatChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: androidx.compose.ui.graphics.Color
+) {
+    Surface(
+        color = tint.copy(alpha = 0.15f),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = tint)
+            Text(label, color = tint, style = MaterialTheme.typography.labelSmall)
         }
     }
 }

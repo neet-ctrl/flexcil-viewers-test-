@@ -36,6 +36,9 @@ class FlexViewModel(application: Application) : AndroidViewModel(application) {
     private val _selectedDocument = MutableStateFlow<FlexDocument?>(null)
     val selectedDocument: StateFlow<FlexDocument?> = _selectedDocument.asStateFlow()
 
+    private val _selectedDocFolderPath = MutableStateFlow("")
+    val selectedDocFolderPath: StateFlow<String> = _selectedDocFolderPath.asStateFlow()
+
     private val _selectedFolder = MutableStateFlow<FolderNode?>(null)
     val selectedFolder: StateFlow<FolderNode?> = _selectedFolder.asStateFlow()
 
@@ -68,8 +71,9 @@ class FlexViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun selectDocument(doc: FlexDocument) {
+    fun selectDocument(doc: FlexDocument, folderPath: String = "") {
         _selectedDocument.value = doc
+        _selectedDocFolderPath.value = folderPath
     }
 
     fun selectFolder(folder: FolderNode) {
@@ -126,24 +130,96 @@ class FlexViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _exportState.value = ExportState.Running
             try {
-                val zipName = "flexcil_export_${System.currentTimeMillis()}.zip"
+                val zipName = "flexcil_pdfs_${System.currentTimeMillis()}.zip"
                 val zipDocUri = androidx.documentfile.provider.DocumentFile
                     .fromTreeUri(context, folderUri)
                     ?.createFile("application/zip", zipName)
                     ?.uri ?: throw Exception("Cannot create ZIP file")
 
+                var count = 0
                 context.contentResolver.openOutputStream(zipDocUri)?.use { out ->
                     ZipOutputStream(out).use { zos ->
                         for ((doc, folderPath) in docs) {
                             val pdfBytes = doc.pdfData ?: continue
-                            val entryName = "$folderPath/${doc.name}.pdf"
+                            val safeName = doc.name.replace(Regex("[/\\\\:*?\"<>|]"), "_")
+                            val entryName = "$folderPath/$safeName.pdf"
                             zos.putNextEntry(ZipEntry(entryName))
                             zos.write(pdfBytes)
                             zos.closeEntry()
+                            count++
                         }
                     }
                 }
-                _exportState.value = ExportState.Done(docs.size)
+                _exportState.value = ExportState.Done(count)
+            } catch (e: Exception) {
+                _exportState.value = ExportState.Error(e.message ?: "Export failed")
+            }
+        }
+    }
+
+    fun exportPreviewsAsZip(context: Context, folderUri: Uri, docs: List<Pair<FlexDocument, String>>) {
+        viewModelScope.launch {
+            _exportState.value = ExportState.Running
+            try {
+                val zipName = "flexcil_previews_${System.currentTimeMillis()}.zip"
+                val zipDocUri = androidx.documentfile.provider.DocumentFile
+                    .fromTreeUri(context, folderUri)
+                    ?.createFile("application/zip", zipName)
+                    ?.uri ?: throw Exception("Cannot create ZIP file")
+
+                var count = 0
+                context.contentResolver.openOutputStream(zipDocUri)?.use { out ->
+                    ZipOutputStream(out).use { zos ->
+                        for ((doc, folderPath) in docs) {
+                            val thumbBytes = doc.thumbnail ?: continue
+                            val safeName = doc.name.replace(Regex("[/\\\\:*?\"<>|]"), "_")
+                            val entryName = "$folderPath/$safeName.jpg"
+                            zos.putNextEntry(ZipEntry(entryName))
+                            zos.write(thumbBytes)
+                            zos.closeEntry()
+                            count++
+                        }
+                    }
+                }
+                _exportState.value = ExportState.Done(count)
+            } catch (e: Exception) {
+                _exportState.value = ExportState.Error(e.message ?: "Export failed")
+            }
+        }
+    }
+
+    fun exportAllAsZip(context: Context, folderUri: Uri, docs: List<Pair<FlexDocument, String>>) {
+        viewModelScope.launch {
+            _exportState.value = ExportState.Running
+            try {
+                val zipName = "flexcil_all_${System.currentTimeMillis()}.zip"
+                val zipDocUri = androidx.documentfile.provider.DocumentFile
+                    .fromTreeUri(context, folderUri)
+                    ?.createFile("application/zip", zipName)
+                    ?.uri ?: throw Exception("Cannot create ZIP file")
+
+                var count = 0
+                context.contentResolver.openOutputStream(zipDocUri)?.use { out ->
+                    ZipOutputStream(out).use { zos ->
+                        for ((doc, folderPath) in docs) {
+                            val safeName = doc.name.replace(Regex("[/\\\\:*?\"<>|]"), "_")
+                            doc.pdfData?.let { pdfBytes ->
+                                val entryName = "$folderPath/PDFs/$safeName.pdf"
+                                zos.putNextEntry(ZipEntry(entryName))
+                                zos.write(pdfBytes)
+                                zos.closeEntry()
+                                count++
+                            }
+                            doc.thumbnail?.let { thumbBytes ->
+                                val entryName = "$folderPath/Previews/$safeName.jpg"
+                                zos.putNextEntry(ZipEntry(entryName))
+                                zos.write(thumbBytes)
+                                zos.closeEntry()
+                            }
+                        }
+                    }
+                }
+                _exportState.value = ExportState.Done(count)
             } catch (e: Exception) {
                 _exportState.value = ExportState.Error(e.message ?: "Export failed")
             }

@@ -295,7 +295,7 @@ Yes — any Flexcil backup from any device or iOS/Android version.
 **The PDF shows a blank or error — why?**  
 Some PDFs use encryption or uncommon features. Enter the password if prompted, or use the Preview tab to see the cover image.
 
-**How do I update the APK after code changes?**  
+**How do I update the APK  code changes?**  
 Push a new tag (`git tag v1.0.1 && git push origin v1.0.1`) or manually trigger the workflow and download the new APK.
 
 **Can I run this fully offline?**  
