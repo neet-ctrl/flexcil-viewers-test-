@@ -60,6 +60,11 @@ jobs:
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses || true
 
+      - name: Install SDK platform 35 and build tools
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" || true
+          echo "✅ SDK platform 35 installed"
+
       # ── 5. (Optional) override versionCode / versionName from inputs ───────
       - name: Apply version from workflow inputs
         if: github.event_name == 'workflow_dispatch'

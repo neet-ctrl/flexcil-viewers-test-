@@ -80,12 +80,9 @@ fun FlexcilApp(viewModel: FlexViewModel) {
             }
 
             is ParseState.Success -> {
-                val backup = state.backup
                 MainScreen(
                     viewModel = viewModel,
-                    rootFolders = backup.rootFolders,
-                    totalDocuments = backup.totalDocuments,
-                    backupName = backup.info.appName,
+                    backup = state.backup,
                     onOpenNewFile = { launchFilePicker() }
                 )
             }

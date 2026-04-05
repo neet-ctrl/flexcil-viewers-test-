@@ -23,20 +23,36 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.flexcilviewer.data.FlexDocument
-import com.flexcilviewer.data.FolderNode
-import com.flexcilviewer.data.getAllDocuments
-import com.flexcilviewer.data.formatDate
-import com.flexcilviewer.data.formatFileSize
+import com.flexcilviewer.data.*
 import com.flexcilviewer.ui.theme.*
+
+// 3-state checkbox state for folders
+private enum class FolderCheckState { ALL, NONE, PARTIAL }
+
+private fun folderCheckState(folder: FolderNode, checkedDocs: Set<String>): FolderCheckState {
+    val all = getAllDocuments(listOf(folder))
+    if (all.isEmpty()) return FolderCheckState.NONE
+    val checkedCount = all.count { (doc, path) -> "${path}/${doc.name}" in checkedDocs }
+    return when (checkedCount) {
+        0 -> FolderCheckState.NONE
+        all.size -> FolderCheckState.ALL
+        else -> FolderCheckState.PARTIAL
+    }
+}
+
+private fun countAllFolders(folders: List<FolderNode>): Int =
+    folders.sumOf { 1 + countAllFolders(it.subfolders) }
 
 @Composable
 fun SidebarContent(
     folders: List<FolderNode>,
+    backupInfo: FlexBackupInfo,
+    totalDocuments: Int,
     selectedDoc: FlexDocument?,
     selectedFolder: FolderNode?,
     checkedDocs: Set<String>,
@@ -48,6 +64,7 @@ fun SidebarContent(
     onCheckAll: (FolderNode) -> Unit,
     onDeselectAll: () -> Unit,
     onExportSelected: () -> Unit,
+    onReset: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -55,39 +72,61 @@ fun SidebarContent(
     val searchResults: List<Pair<FlexDocument, String>> = remember(searchQuery, folders) {
         if (searchQuery.isBlank()) emptyList()
         else getAllDocuments(folders).filter { (doc, _) ->
-            doc.name.contains(searchQuery, ignoreCase = true)
+            doc.name.contains(searchQuery, ignoreCase = true) ||
+            (doc.info?.name?.contains(searchQuery, ignoreCase = true) == true)
         }
     }
 
+    val totalFolders = remember(folders) { countAllFolders(folders) }
+
     Column(modifier = modifier.background(SurfaceDark)) {
-        // Header
-        Surface(color = CardDark, modifier = Modifier.fillMaxWidth()) {
+
+        // ── Sidebar header (matches web: home button, backup name + date) ──
+        Surface(
+            color = CardDark,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.FolderOpen, contentDescription = null, tint = PrimaryIndigoLight, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Folders",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = TextPrimary,
-                    modifier = Modifier.weight(1f)
-                )
-                if (checkedDocs.isNotEmpty()) {
-                    TextButton(onClick = onDeselectAll, contentPadding = PaddingValues(horizontal = 4.dp)) {
-                        Text("Clear ${checkedDocs.size}", color = TextSecondary, style = MaterialTheme.typography.labelSmall)
+                IconButton(
+                    onClick = onReset,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(Icons.Default.Home, contentDescription = "Open another file", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(6.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        backupInfo.appName.ifBlank { "Flexcil Backup" },
+                        style = MaterialTheme.typography.titleSmall,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (backupInfo.backupDate.isNotBlank()) {
+                        Text(
+                            backupInfo.backupDate,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
         }
 
-        // Search bar
+        // ── Search bar ──
         OutlinedTextField(
             value = searchQuery,
             onValueChange = onSearchQueryChange,
             placeholder = { Text("Search documents…", style = MaterialTheme.typography.bodyMedium, color = TextMuted) },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextMuted, modifier = Modifier.size(18.dp)) },
+            leadingIcon = {
+                Icon(Icons.Default.Search, contentDescription = null, tint = TextMuted, modifier = Modifier.size(18.dp))
+            },
             trailingIcon = {
                 if (searchQuery.isNotEmpty()) {
                     IconButton(onClick = { onSearchQueryChange("") }) {
@@ -114,22 +153,35 @@ fun SidebarContent(
             textStyle = MaterialTheme.typography.bodyMedium
         )
 
+        // ── "N selected" banner ──
         if (checkedDocs.isNotEmpty()) {
-            Surface(color = PrimaryIndigoDark.copy(alpha = 0.3f), modifier = Modifier.fillMaxWidth()) {
+            Surface(
+                color = PrimaryIndigoDark.copy(alpha = 0.3f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "${checkedDocs.size} selected",
+                        "${checkedDocs.size} selected — tap Export",
                         color = PrimaryIndigoLight,
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.weight(1f)
                     )
-                    TextButton(onClick = onExportSelected, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    TextButton(
+                        onClick = onExportSelected,
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
                         Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp), tint = PrimaryIndigoLight)
                         Spacer(Modifier.width(4.dp))
                         Text("Export", color = PrimaryIndigoLight, style = MaterialTheme.typography.labelLarge)
+                    }
+                    TextButton(
+                        onClick = onDeselectAll,
+                        contentPadding = PaddingValues(horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp), tint = TextSecondary)
                     }
                 }
             }
@@ -137,8 +189,8 @@ fun SidebarContent(
 
         HorizontalDivider(color = DividerColor)
 
+        // ── Tree or search results ──
         if (searchQuery.isNotBlank()) {
-            // Search results — flat list
             if (searchResults.isEmpty()) {
                 Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -154,7 +206,7 @@ fun SidebarContent(
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 )
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(modifier = Modifier.weight(1f)) {
                     items(searchResults, key = { (doc, path) -> "$path/${doc.name}" }) { (doc, path) ->
                         DocumentRow(
                             doc = doc,
@@ -170,8 +222,7 @@ fun SidebarContent(
                 }
             }
         } else {
-            // Normal tree view
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(modifier = Modifier.weight(1f)) {
                 for (folder in folders) {
                     item(key = folder.fullPath) {
                         FolderTreeNode(
@@ -186,6 +237,25 @@ fun SidebarContent(
                             onCheckAll = onCheckAll
                         )
                     }
+                }
+            }
+        }
+
+        // ── Footer (matches web: "N documents · N folders" + version) ──
+        HorizontalDivider(color = DividerColor)
+        Surface(color = CardDark, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Text(
+                    "$totalDocuments documents · $totalFolders folders",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary
+                )
+                if (backupInfo.appVersion.isNotBlank()) {
+                    Text(
+                        "Flexcil v${backupInfo.appVersion}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted
+                    )
                 }
             }
         }
@@ -204,53 +274,84 @@ private fun FolderTreeNode(
     onCheckToggle: (String) -> Unit,
     onCheckAll: (FolderNode) -> Unit
 ) {
-    var expanded by remember(folder.fullPath) { mutableStateOf(depth == 0) }
-    val indent: Dp = (depth * 16).dp
+    var expanded by remember(folder.fullPath) { mutableStateOf(true) }
+    val indent: Dp = (depth * 14).dp
+    val checkState = folderCheckState(folder, checkedDocs)
+    val docCount = folder.totalDocuments
 
-    // Folder header row
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable {
-                expanded = !expanded
-                onFolderClick(folder)
-            }
-            .background(
-                if (selectedFolder?.fullPath == folder.fullPath) SelectedBg else SurfaceDark
-            )
-            .padding(start = 8.dp + indent, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            .background(if (selectedFolder?.fullPath == folder.fullPath) SelectedBg else SurfaceDark)
+            .padding(start = 4.dp + indent, end = 4.dp, top = 2.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
-            contentDescription = null,
-            tint = TextSecondary,
-            modifier = Modifier.size(18.dp)
-        )
-        Spacer(Modifier.width(4.dp))
-        Icon(
-            if (expanded) Icons.Default.FolderOpen else Icons.Default.Folder,
-            contentDescription = null,
-            tint = PrimaryIndigoLight,
-            modifier = Modifier.size(18.dp)
-        )
-        Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f)) {
+        // 3-state folder checkbox
+        IconButton(
+            onClick = { onCheckAll(folder) },
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                when (checkState) {
+                    FolderCheckState.ALL -> Icons.Default.CheckBox
+                    FolderCheckState.PARTIAL -> Icons.Default.IndeterminateCheckBox
+                    FolderCheckState.NONE -> Icons.Default.CheckBoxOutlineBlank
+                },
+                contentDescription = null,
+                tint = when (checkState) {
+                    FolderCheckState.NONE -> TextMuted
+                    else -> PrimaryIndigoLight
+                },
+                modifier = Modifier.size(16.dp)
+            )
+        }
+
+        // Folder name + expand toggle
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .clickable {
+                    expanded = !expanded
+                    onFolderClick(folder)
+                }
+                .padding(vertical = 8.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = TextSecondary,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                if (expanded) Icons.Default.FolderOpen else Icons.Default.Folder,
+                contentDescription = null,
+                tint = PrimaryIndigoLight,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
             Text(
                 folder.name,
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextPrimary,
+                fontWeight = FontWeight.Medium,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
-            Text(
-                "${folder.totalDocuments} docs",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextMuted
-            )
-        }
-        IconButton(onClick = { onCheckAll(folder) }, modifier = Modifier.size(28.dp)) {
-            Icon(Icons.Default.CheckBox, contentDescription = "Select all", tint = TextMuted, modifier = Modifier.size(16.dp))
+            // Doc count pill (matches web)
+            Surface(
+                color = SurfaceVariantDark,
+                shape = RoundedCornerShape(50)
+            ) {
+                Text(
+                    "$docCount",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
         }
     }
 
@@ -277,7 +378,7 @@ private fun FolderTreeNode(
                 DocumentRow(
                     doc = doc,
                     folderPath = folder.fullPath,
-                    indent = indent + 24.dp,
+                    indent = indent + 28.dp,
                     isSelected = selectedDoc?.name == doc.name,
                     isChecked = "${folder.fullPath}/${doc.name}" in checkedDocs,
                     onDocClick = onDocClick,
@@ -308,11 +409,11 @@ private fun DocumentRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onDocClick(doc, folderPath) }
             .background(if (isSelected) SelectedBg else SurfaceDark)
-            .padding(start = indent, end = 8.dp, top = 6.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(start = indent, end = 8.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.Top
     ) {
+        // Per-doc checkbox
         Checkbox(
             checked = isChecked,
             onCheckedChange = { onCheckToggle() },
@@ -320,56 +421,82 @@ private fun DocumentRow(
                 checkedColor = PrimaryIndigo,
                 uncheckedColor = TextMuted
             ),
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(20.dp).padding(top = 6.dp)
         )
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(6.dp))
 
-        if (thumbBitmap != null) {
-            Image(
-                bitmap = thumbBitmap.asImageBitmap(),
-                contentDescription = null,
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(CardDark),
-                contentScale = ContentScale.Crop
-            )
-        } else {
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(SurfaceVariantDark),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    if (doc.pdfData != null) Icons.Default.PictureAsPdf else Icons.Default.Description,
+        // Clickable area
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .clickable { onDocClick(doc, folderPath) }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            // Thumbnail or icon
+            if (thumbBitmap != null) {
+                Image(
+                    bitmap = thumbBitmap.asImageBitmap(),
                     contentDescription = null,
-                    tint = PrimaryIndigoLight,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(CardDark),
+                    contentScale = ContentScale.Crop
                 )
+            } else {
+                Box(
+                    Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(SurfaceVariantDark),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        if (doc.pdfData != null) Icons.Default.PictureAsPdf else Icons.Default.Description,
+                        contentDescription = null,
+                        tint = if (doc.pdfData != null) PrimaryIndigoLight else TextMuted,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
-        }
 
-        Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                doc.name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextPrimary.copy(alpha = if (isSelected) 1f else 0.9f),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                buildString {
-                    append(formatFileSize(doc.flxSize))
-                    doc.info?.modifiedDate?.takeIf { it > 0 }?.let { append("  •  ${formatDate(it)}") }
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = TextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Spacer(Modifier.width(8.dp))
+
+            Column(Modifier.weight(1f)) {
+                Text(
+                    doc.info?.name?.takeIf { it.isNotBlank() } ?: doc.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isSelected) PrimaryIndigoLight else TextPrimary,
+                    fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                // Modified date (matches web)
+                doc.info?.modifiedDate?.takeIf { it > 0 }?.let {
+                    Text(
+                        formatDate(it),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted,
+                        maxLines = 1
+                    )
+                }
+                // PDF badge (matches web)
+                if (doc.pdfData != null) {
+                    Spacer(Modifier.height(2.dp))
+                    Surface(
+                        color = PrimaryIndigoDark.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            "PDF",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PrimaryIndigoLight,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }

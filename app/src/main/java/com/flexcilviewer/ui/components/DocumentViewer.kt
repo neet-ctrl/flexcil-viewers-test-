@@ -1,6 +1,9 @@
 package com.flexcilviewer.ui.components
 
+import android.content.ContentValues
 import android.graphics.BitmapFactory
+import android.os.Build
+import android.provider.MediaStore
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -16,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.flexcilviewer.data.FlexDocument
@@ -37,163 +41,256 @@ fun DocumentViewer(
     onExportClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var selectedTab by remember(doc) {
-        mutableStateOf(if (doc.pdfData != null) ViewerTab.PDF else ViewerTab.DETAILS)
+    val context = LocalContext.current
+    val annotationCount = doc.strokeFileCount + doc.annotationFileCount + doc.highlightFileCount
+    val displayName = doc.info?.name?.takeIf { it.isNotBlank() } ?: doc.name
+
+    // Tab visibility mirrors web: PDF only if pdfData, Preview only if thumbnail,
+    // Annotations only if annotationCount > 0, Details always
+    val visibleTabs = remember(doc) {
+        buildList {
+            if (doc.pdfData != null) add(ViewerTab.PDF)
+            if (doc.thumbnail != null) add(ViewerTab.PREVIEW)
+            if (annotationCount > 0) add(ViewerTab.ANNOTATIONS)
+            add(ViewerTab.DETAILS)
+        }
     }
+
+    var selectedTab by remember(doc) {
+        mutableStateOf(
+            when {
+                doc.pdfData != null -> ViewerTab.PDF
+                doc.thumbnail != null -> ViewerTab.PREVIEW
+                else -> ViewerTab.DETAILS
+            }
+        )
+    }
+
+    // Keep selectedTab within visible tabs
+    LaunchedEffect(visibleTabs) {
+        if (selectedTab !in visibleTabs) selectedTab = visibleTabs.first()
+    }
+
     var copiedName by remember { mutableStateOf(false) }
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
 
+    fun saveToDownloads(bytes: ByteArray, fileName: String, mimeType: String) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(MediaStore.Downloads.MIME_TYPE, mimeType)
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val item = resolver.insert(collection, values) ?: return
+                resolver.openOutputStream(item)?.use { it.write(bytes) }
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                resolver.update(item, values, null, null)
+            }
+        } catch (_: Exception) { }
+    }
+
     Column(modifier = modifier.background(BackgroundDark)) {
-        // Top bar
-        Surface(
-            color = SurfaceDark,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    if (folderPath.isNotBlank()) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(Icons.Default.Folder, contentDescription = null, tint = TextMuted, modifier = Modifier.size(12.dp))
-                            Text(
-                                text = folderPath,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                            )
-                        }
+
+        // ── Header (matches web DocumentViewer header) ──────────────────────
+        Surface(color = SurfaceDark, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 8.dp)) {
+
+                // Folder breadcrumb (Layers icon + folder path)
+                if (folderPath.isNotBlank()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(Icons.Default.Layers, contentDescription = null, tint = TextMuted, modifier = Modifier.size(12.dp))
+                        Text(
+                            folderPath,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
                     }
+                    Spacer(Modifier.height(2.dp))
+                }
+
+                // Document name + copy button row
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = doc.info?.name?.takeIf { it.isNotBlank() } ?: doc.name,
+                        displayName,
                         style = MaterialTheme.typography.titleMedium,
                         color = TextPrimary,
-                        maxLines = 2
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        modifier = Modifier.weight(1f)
                     )
-                    doc.info?.let {
-                        if (it.modifiedDate > 0) {
-                            Text(
-                                text = "Modified: ${formatDate(it.modifiedDate)}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextSecondary
-                            )
+                    IconButton(
+                        onClick = {
+                            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(displayName))
+                            copiedName = true
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            if (copiedName) Icons.Default.Check else Icons.Default.ContentCopy,
+                            contentDescription = "Copy name",
+                            tint = if (copiedName) AccentGreen else TextMuted,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    LaunchedEffect(copiedName) {
+                        if (copiedName) {
+                            kotlinx.coroutines.delay(2000)
+                            copiedName = false
                         }
                     }
                 }
-                // Copy name button
-                IconButton(
-                    onClick = {
-                        clipboardManager.setText(
-                            androidx.compose.ui.text.AnnotatedString(doc.info?.name?.takeIf { it.isNotBlank() } ?: doc.name)
-                        )
-                        copiedName = true
-                    }
+
+                // Created / Modified / Size (matches web header metadata row)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(top = 2.dp)
                 ) {
-                    Icon(
-                        if (copiedName) Icons.Default.Check else Icons.Default.ContentCopy,
-                        contentDescription = "Copy name",
-                        tint = if (copiedName) AccentGreen else TextMuted,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                LaunchedEffect(copiedName) {
-                    if (copiedName) {
-                        kotlinx.coroutines.delay(2000)
-                        copiedName = false
+                    doc.info?.createDate?.takeIf { it > 0 }?.let {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Icon(Icons.Default.CalendarToday, contentDescription = null, tint = TextMuted, modifier = Modifier.size(11.dp))
+                            Text("Created: ${formatDate(it)}", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                        }
+                    }
+                    doc.info?.modifiedDate?.takeIf { it > 0 }?.let {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Icon(Icons.Default.Schedule, contentDescription = null, tint = TextMuted, modifier = Modifier.size(11.dp))
+                            Text("Modified: ${formatDate(it)}", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                        }
+                    }
+                    if (doc.flxSize > 0) {
+                        Text(formatFileSize(doc.flxSize), style = MaterialTheme.typography.labelSmall, color = TextMuted)
                     }
                 }
-                // Export button
-                IconButton(onClick = onExportClick) {
-                    Icon(Icons.Default.FileDownload, contentDescription = "Export", tint = PrimaryIndigoLight)
+
+                Spacer(Modifier.height(8.dp))
+
+                // Download buttons row (matches web: PDF button, Preview button, ZIP button)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (doc.pdfData != null) {
+                        Button(
+                            onClick = { saveToDownloads(doc.pdfData, "$displayName.pdf", "application/pdf") },
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("PDF", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    if (doc.thumbnail != null) {
+                        OutlinedButton(
+                            onClick = { saveToDownloads(doc.thumbnail, "${displayName}_preview.jpg", "image/jpeg") },
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary)
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Preview", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    if (doc.pdfData != null || doc.thumbnail != null) {
+                        OutlinedButton(
+                            onClick = onExportClick,
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextMuted)
+                        ) {
+                            Icon(Icons.Default.Inventory2, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("ZIP", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
             }
         }
 
-        // Tab row
+        // ── Tab row ──────────────────────────────────────────────────────────
         Surface(color = SurfaceDark, modifier = Modifier.fillMaxWidth()) {
             ScrollableTabRow(
-                selectedTabIndex = selectedTab.ordinal,
+                selectedTabIndex = visibleTabs.indexOf(selectedTab).coerceAtLeast(0),
                 containerColor = SurfaceDark,
                 contentColor = PrimaryIndigoLight,
                 edgePadding = 0.dp,
                 indicator = { tabPositions ->
-                    if (selectedTab.ordinal < tabPositions.size) {
+                    val idx = visibleTabs.indexOf(selectedTab).coerceAtLeast(0)
+                    if (idx < tabPositions.size) {
                         TabRowDefaults.SecondaryIndicator(
-                            modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab.ordinal]),
+                            modifier = Modifier.tabIndicatorOffset(tabPositions[idx]),
                             color = PrimaryIndigo
                         )
                     }
                 },
                 divider = { HorizontalDivider(color = DividerColor) }
             ) {
-                ViewerTab.entries.forEach { tab ->
-                    val enabled = when (tab) {
-                        ViewerTab.PDF -> doc.pdfData != null
-                        ViewerTab.PREVIEW -> doc.thumbnail != null
-                        ViewerTab.ANNOTATIONS -> true
-                        ViewerTab.DETAILS -> true
-                    }
+                visibleTabs.forEach { tab ->
                     Tab(
                         selected = selectedTab == tab,
-                        onClick = { if (enabled) selectedTab = tab },
-                        enabled = enabled,
+                        onClick = { selectedTab = tab },
                         text = {
-                            Text(
-                                tab.label,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = when {
-                                    !enabled -> TextMuted
-                                    selectedTab == tab -> PrimaryIndigoLight
-                                    else -> TextSecondary
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    tab.icon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = if (selectedTab == tab) PrimaryIndigoLight else TextSecondary
+                                )
+                                Text(
+                                    tab.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (selectedTab == tab) PrimaryIndigoLight else TextSecondary
+                                )
+                                // Annotation badge on tab (matches web)
+                                if (tab == ViewerTab.ANNOTATIONS && annotationCount > 0) {
+                                    Surface(
+                                        color = if (selectedTab == tab) PrimaryIndigoLight.copy(alpha = 0.2f) else PrimaryIndigoDark.copy(alpha = 0.4f),
+                                        shape = RoundedCornerShape(50)
+                                    ) {
+                                        Text(
+                                            "$annotationCount",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = PrimaryIndigoLight,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        )
+                                    }
                                 }
-                            )
-                        },
-                        icon = {
-                            Icon(
-                                tab.icon,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = when {
-                                    !enabled -> TextMuted
-                                    selectedTab == tab -> PrimaryIndigoLight
-                                    else -> TextSecondary
-                                }
-                            )
+                            }
                         }
                     )
                 }
             }
         }
 
-        // Tab content
+        // ── Tab content ───────────────────────────────────────────────────────
         when (selectedTab) {
             ViewerTab.PDF -> {
-                if (doc.pdfData != null) {
-                    PdfViewer(pdfBytes = doc.pdfData, modifier = Modifier.fillMaxSize())
-                }
+                if (doc.pdfData != null) PdfViewer(pdfBytes = doc.pdfData, modifier = Modifier.fillMaxSize())
             }
-            ViewerTab.PREVIEW -> {
-                PreviewPane(doc = doc, modifier = Modifier.fillMaxSize())
-            }
-            ViewerTab.ANNOTATIONS -> {
-                AnnotationsPane(doc = doc, modifier = Modifier.fillMaxSize())
-            }
-            ViewerTab.DETAILS -> {
-                DetailsPane(doc = doc, modifier = Modifier.fillMaxSize())
-            }
+            ViewerTab.PREVIEW -> PreviewPane(doc = doc, displayName = displayName, modifier = Modifier.fillMaxSize())
+            ViewerTab.ANNOTATIONS -> AnnotationsPane(doc = doc, modifier = Modifier.fillMaxSize())
+            ViewerTab.DETAILS -> DetailsPane(doc = doc, displayName = displayName, folderPath = folderPath, onSaveFile = ::saveToDownloads, modifier = Modifier.fillMaxSize())
         }
     }
 }
 
+// ─── Preview tab ──────────────────────────────────────────────────────────────
+
 @Composable
-private fun PreviewPane(doc: FlexDocument, modifier: Modifier = Modifier) {
+private fun PreviewPane(doc: FlexDocument, displayName: String, modifier: Modifier = Modifier) {
     val bitmap = remember(doc.thumbnail) {
         doc.thumbnail?.let { bytes ->
             runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
@@ -207,24 +304,20 @@ private fun PreviewPane(doc: FlexDocument, modifier: Modifier = Modifier) {
         if (bitmap != null) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = CardDark,
-                    shadowElevation = 4.dp
-                ) {
+                Surface(shape = RoundedCornerShape(12.dp), color = CardDark, shadowElevation = 4.dp) {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Document preview",
+                        contentDescription = "Preview for $displayName",
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 480.dp),
+                            .heightIn(max = 500.dp),
                         contentScale = ContentScale.Fit
                     )
                 }
                 Text(
-                    "Cover preview — ${bitmap.width} × ${bitmap.height} px",
+                    "Document cover preview generated by Flexcil",
                     color = TextMuted,
                     style = MaterialTheme.typography.labelSmall
                 )
@@ -241,90 +334,59 @@ private fun PreviewPane(doc: FlexDocument, modifier: Modifier = Modifier) {
     }
 }
 
+// ─── Annotations tab ──────────────────────────────────────────────────────────
+
 @Composable
 private fun AnnotationsPane(doc: FlexDocument, modifier: Modifier = Modifier) {
+    val total = doc.strokeFileCount + doc.annotationFileCount + doc.highlightFileCount
     val scroll = rememberScrollState()
-    val hasAnnotations = doc.strokeFileCount > 0 || doc.annotationFileCount > 0 || doc.highlightFileCount > 0
 
     Column(
-        modifier = modifier
-            .verticalScroll(scroll)
-            .padding(20.dp),
+        modifier = modifier.verticalScroll(scroll).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            "Annotation Summary",
+            "Handwriting & Annotations",
             style = MaterialTheme.typography.titleMedium,
-            color = PrimaryIndigoLight,
+            color = TextPrimary,
             fontWeight = FontWeight.SemiBold
         )
+        Text(
+            "This document contains $total annotation page${if (total != 1) "s" else ""} (pen strokes, highlights, text marks).",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextSecondary
+        )
 
-        if (!hasAnnotations) {
-            Surface(
-                color = SurfaceVariantDark,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(Icons.Default.Info, contentDescription = null, tint = TextMuted)
-                    Text(
-                        "No annotation data found in this document.",
-                        color = TextSecondary,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-        } else {
-            Surface(
-                color = CardDark,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (doc.strokeFileCount > 0) {
-                        AnnotationStatRow(
-                            icon = Icons.Default.Draw,
-                            iconTint = PrimaryIndigoLight,
-                            label = "Pen Strokes",
-                            detail = "${doc.strokeFileCount} page${if (doc.strokeFileCount != 1) "s" else ""} with strokes"
-                        )
-                    }
-                    if (doc.annotationFileCount > 0) {
-                        AnnotationStatRow(
-                            icon = Icons.Default.EditNote,
-                            iconTint = AccentAmber,
-                            label = "Annotations",
-                            detail = "${doc.annotationFileCount} page${if (doc.annotationFileCount != 1) "s" else ""} annotated"
-                        )
-                    }
-                    if (doc.highlightFileCount > 0) {
-                        AnnotationStatRow(
-                            icon = Icons.Default.Highlight,
-                            iconTint = AccentGreen,
-                            label = "Highlights",
-                            detail = "${doc.highlightFileCount} page${if (doc.highlightFileCount != 1) "s" else ""} highlighted"
-                        )
-                    }
-                }
-            }
+        if (doc.strokeFileCount > 0) {
+            AnnotationCard(
+                title = "Pen Strokes",
+                badge = "${doc.strokeFileCount} page${if (doc.strokeFileCount != 1) "s" else ""}",
+                types = listOf("Pen"),
+                icon = Icons.Default.Draw,
+                iconTint = PrimaryIndigoLight
+            )
         }
-
-        // Annotation page count if we know it
+        if (doc.annotationFileCount > 0) {
+            AnnotationCard(
+                title = "Annotations",
+                badge = "${doc.annotationFileCount} page${if (doc.annotationFileCount != 1) "s" else ""}",
+                types = listOf("Text", "Mark"),
+                icon = Icons.Default.EditNote,
+                iconTint = AccentAmber
+            )
+        }
+        if (doc.highlightFileCount > 0) {
+            AnnotationCard(
+                title = "Highlights",
+                badge = "${doc.highlightFileCount} page${if (doc.highlightFileCount != 1) "s" else ""}",
+                types = listOf("Highlight"),
+                icon = Icons.Default.Highlight,
+                iconTint = AccentGreen
+            )
+        }
         if (doc.pageCount > 0) {
-            Surface(
-                color = CardDark,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+            Surface(color = CardDark, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Icon(Icons.Default.Pages, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(20.dp))
                     Column {
                         Text("Total Pages", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
@@ -337,144 +399,153 @@ private fun AnnotationsPane(doc: FlexDocument, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun AnnotationStatRow(
+private fun AnnotationCard(
+    title: String,
+    badge: String,
+    types: List<String>,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    iconTint: androidx.compose.ui.graphics.Color,
-    label: String,
-    detail: String
+    iconTint: androidx.compose.ui.graphics.Color
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(iconTint.copy(alpha = 0.15f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(20.dp))
+    Surface(color = CardDark, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(iconTint.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(title, style = MaterialTheme.typography.bodyMedium, color = TextPrimary, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                Surface(color = SurfaceVariantDark, shape = RoundedCornerShape(50)) {
+                    Text(badge, style = MaterialTheme.typography.labelSmall, color = TextSecondary, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                types.forEach { type ->
+                    Surface(color = PrimaryIndigoDark.copy(alpha = 0.4f), shape = RoundedCornerShape(50)) {
+                        Text(type, style = MaterialTheme.typography.labelSmall, color = PrimaryIndigoLight, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+                    }
+                }
+            }
         }
-        Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
-            Text(detail, style = MaterialTheme.typography.labelSmall, color = TextMuted)
+    }
+}
+
+// ─── Details tab ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun DetailsPane(
+    doc: FlexDocument,
+    displayName: String,
+    folderPath: String,
+    onSaveFile: (ByteArray, String, String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val scroll = rememberScrollState()
+    Column(
+        modifier = modifier.verticalScroll(scroll).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
+    ) {
+
+        // ── Document Details section ──────────────────────────────────────────
+        DetailSection(title = "Document Details") {
+            InfoRow("Name", displayName)
+            if (folderPath.isNotBlank()) InfoRow("Folder", folderPath)
+            doc.info?.let { info ->
+                if (info.key.isNotBlank()) InfoRow("Document ID", info.key)
+                InfoRow("Type", when (info.type) {
+                    0 -> "PDF Document"
+                    1 -> "Notebook"
+                    2 -> "PDF Annotation"
+                    else -> "Type ${info.type}"
+                })
+                if (info.createDate > 0) InfoRow("Created", formatDate(info.createDate))
+                if (info.modifiedDate > 0) InfoRow("Modified", formatDate(info.modifiedDate))
+            }
+            InfoRow(".flx File Size", formatFileSize(doc.flxSize))
+            if (doc.pdfData != null) InfoRow("PDF Size", formatFileSize(doc.pdfData.size.toLong()))
+            if (doc.thumbnail != null) InfoRow("Preview Size", formatFileSize(doc.thumbnail.size.toLong()))
+        }
+
+        // ── Status badges ────────────────────────────────────────────────────
+        if (doc.pdfData != null || doc.thumbnail != null || doc.strokeFileCount > 0 || doc.annotationFileCount > 0) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (doc.pdfData != null) {
+                    BadgeChip(icon = Icons.Default.PictureAsPdf, label = "PDF", bgColor = PrimaryIndigoDark.copy(alpha = 0.5f), tint = PrimaryIndigoLight)
+                }
+                if (doc.thumbnail != null) {
+                    BadgeChip(icon = Icons.Default.Image, label = "Preview", bgColor = AccentGreen.copy(alpha = 0.2f), tint = AccentGreen)
+                }
+                if (doc.strokeFileCount > 0 || doc.annotationFileCount > 0) {
+                    BadgeChip(icon = Icons.Default.Draw, label = "Annotations", bgColor = AccentAmber.copy(alpha = 0.2f), tint = AccentAmber)
+                }
+            }
+        }
+
+        // ── Embedded Files section (matches web InfoTab "Embedded Files") ─────
+        DetailSection(title = "Embedded Files") {
+            if (doc.pdfData != null) {
+                FileRow(
+                    emoji = "📄",
+                    name = "PDF Document",
+                    size = doc.pdfData.size.toLong(),
+                    onDownload = { onSaveFile(doc.pdfData, "$displayName.pdf", "application/pdf") }
+                )
+            }
+            if (doc.thumbnail != null) {
+                FileRow(
+                    emoji = "🖼️",
+                    name = "Cover Preview (JPEG)",
+                    size = doc.thumbnail.size.toLong(),
+                    onDownload = { onSaveFile(doc.thumbnail, "${displayName}_preview.jpg", "image/jpeg") }
+                )
+            }
+            if (doc.pageCount > 0) {
+                FileRow(emoji = "📋", name = "Page Index (${doc.pageCount} pages)", size = 0, onDownload = null)
+            }
+            val totalAnnotations = doc.strokeFileCount + doc.annotationFileCount + doc.highlightFileCount
+            if (totalAnnotations > 0) {
+                FileRow(emoji = "✏️", name = "Annotation Data ($totalAnnotations layers)", size = 0, onDownload = null)
+            }
+            if (doc.pdfData == null && doc.thumbnail == null && doc.pageCount == 0 && totalAnnotations == 0) {
+                Text("No embedded files detected.", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+            }
         }
     }
 }
 
 @Composable
-private fun DetailsPane(doc: FlexDocument, modifier: Modifier = Modifier) {
-    val scroll = rememberScrollState()
-    Column(
-        modifier = modifier
-            .verticalScroll(scroll)
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+private fun DetailSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column {
+        Text(title, style = MaterialTheme.typography.titleSmall, color = TextPrimary, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        Surface(color = CardDark, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp), content = content)
+        }
+    }
+}
+
+@Composable
+private fun FileRow(
+    emoji: String,
+    name: String,
+    size: Long,
+    onDownload: (() -> Unit)?
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Thumbnail at top if available
-        doc.thumbnail?.let { thumbBytes ->
-            val bitmap = remember(thumbBytes) {
-                runCatching { BitmapFactory.decodeByteArray(thumbBytes, 0, thumbBytes.size) }.getOrNull()
-            }
-            bitmap?.let {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(180.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(CardDark),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Image(
-                        bitmap = it.asImageBitmap(),
-                        contentDescription = "Thumbnail",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    )
-                }
-            }
-        }
-
-        // Document info card
-        Surface(
-            color = CardDark,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    "Document Details",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = PrimaryIndigoLight,
-                    fontWeight = FontWeight.SemiBold
-                )
-                HorizontalDivider(color = DividerColor)
-                InfoRow(label = "Name", value = doc.name)
-                InfoRow(label = "File size", value = formatFileSize(doc.flxSize))
-                doc.info?.let { info ->
-                    if (info.createDate > 0) InfoRow(label = "Created", value = formatDate(info.createDate))
-                    if (info.modifiedDate > 0) InfoRow(label = "Modified", value = formatDate(info.modifiedDate))
-                    InfoRow(label = "Type", value = when (info.type) {
-                        0 -> "Document"
-                        1 -> "Notebook"
-                        2 -> "PDF Annotation"
-                        else -> "Unknown (${info.type})"
-                    })
-                    if (info.key.isNotBlank()) InfoRow(label = "Key", value = info.key)
-                }
-                if (doc.pageCount > 0) InfoRow(label = "Pages", value = "${doc.pageCount}")
-                InfoRow(label = "Has PDF", value = if (doc.pdfData != null) "Yes (${formatFileSize(doc.pdfData.size.toLong())})" else "No")
-                InfoRow(label = "Has Preview", value = if (doc.thumbnail != null) "Yes" else "No")
-            }
-        }
-
-        // Status badges
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            if (doc.pdfData != null) {
-                BadgeChip(
-                    icon = Icons.Default.PictureAsPdf,
-                    label = "PDF",
-                    bgColor = PrimaryIndigoDark.copy(alpha = 0.6f),
-                    tint = PrimaryIndigoLight
-                )
-            }
-            if (doc.thumbnail != null) {
-                BadgeChip(
-                    icon = Icons.Default.Image,
-                    label = "Preview",
-                    bgColor = AccentGreen.copy(alpha = 0.2f),
-                    tint = AccentGreen
-                )
-            }
-            if (doc.strokeFileCount > 0 || doc.annotationFileCount > 0) {
-                BadgeChip(
-                    icon = Icons.Default.Draw,
-                    label = "Annotations",
-                    bgColor = AccentAmber.copy(alpha = 0.2f),
-                    tint = AccentAmber
-                )
-            }
-        }
-
-        if (doc.pdfData == null && doc.thumbnail == null) {
-            Surface(
-                color = SurfaceVariantDark,
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(Icons.Default.Info, contentDescription = null, tint = TextMuted)
-                    Text(
-                        "This document contains drawing/annotation data but no embedded PDF or thumbnail.",
-                        color = TextSecondary,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
+        Text(emoji, style = MaterialTheme.typography.titleMedium)
+        Text(name, style = MaterialTheme.typography.bodySmall, color = TextPrimary, modifier = Modifier.weight(1f))
+        if (size > 0) Text(formatFileSize(size), style = MaterialTheme.typography.labelSmall, color = TextMuted)
+        if (onDownload != null) {
+            IconButton(onClick = onDownload, modifier = Modifier.size(28.dp)) {
+                Icon(Icons.Default.Download, contentDescription = "Download", tint = TextSecondary, modifier = Modifier.size(16.dp))
             }
         }
     }
@@ -501,12 +572,9 @@ private fun BadgeChip(
 
 @Composable
 private fun InfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Top
-    ) {
-        Text(label, color = TextSecondary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(0.4f))
-        Text(value, color = TextPrimary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(0.6f))
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(label, color = TextSecondary, style = MaterialTheme.typography.labelSmall)
+        Text(value, color = TextPrimary, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+        HorizontalDivider(color = DividerColor, thickness = 0.5.dp, modifier = Modifier.padding(top = 4.dp))
     }
 }

@@ -89,7 +89,9 @@ class FlexViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkAllInFolder(folder: FolderNode) {
         val all = getAllDocuments(listOf(folder)).map { "${it.second}/${it.first.name}" }.toSet()
-        _checkedDocs.value = _checkedDocs.value + all
+        val current = _checkedDocs.value
+        // If all already checked → deselect (3-state toggle matching web)
+        _checkedDocs.value = if (current.containsAll(all)) current - all else current + all
     }
 
     fun deselectAll() {
