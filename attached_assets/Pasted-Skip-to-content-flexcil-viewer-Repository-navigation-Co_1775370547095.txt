@@ -1,0 +1,89 @@
+Skip to content
+flexcil-viewer
+Repository navigation
+Code
+Issues
+Actions
+Build Android APK
+Build Android APK #2
+build-apk
+failed now in 1m 13s
+4s
+1s
+4s
+2s
+0s
+5s
+2s
+5s
+0s
+19s
+4s
+[============================           ] 70% Fetch remote repository...        
+[============================           ] 72% Fetch remote repository...        
+[=============================          ] 73% Fetch remote repository...        
+[=============================          ] 74% Fetch remote repository...        
+[=============================          ] 75% Fetch remote repository...        
+[=============================          ] 75% Computing updates...              
+[=======================================] 100% Computing updates...             
+All SDK package licenses accepted.
+yes: standard output: Broken pipe
+4s
+Run npm install -g @capacitor/cli
+  
+added 90 packages in 4s
+11 packages are looking for funding
+  run `npm fund` for details
+19s
+Run npm install @capacitor/core @capacitor/android
+npm warn ERESOLVE overriding peer dependency
+npm warn While resolving: typescript@5.9.3
+npm warn Found: peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/rule-tester@8.58.0
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/rule-tester
+npm warn   dev @typescript-eslint/rule-tester@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn
+npm warn Could not resolve dependency:
+npm warn peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/rule-tester@8.58.0
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/rule-tester
+npm warn   dev @typescript-eslint/rule-tester@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn ERESOLVE overriding peer dependency
+npm warn While resolving: typescript@5.9.3
+npm warn Found: peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/type-utils@8.58.0
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/type-utils
+npm warn   dev @typescript-eslint/type-utils@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn
+npm warn Could not resolve dependency:
+npm warn peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/type-utils@8.58.0
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/type-utils
+npm warn   dev @typescript-eslint/type-utils@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn ERESOLVE overriding peer dependency
+npm warn While resolving: typescript@5.9.3
+npm warn Found: peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/utils@8.58.0
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/utils
+npm warn   dev @typescript-eslint/utils@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn   2 more (@typescript-eslint/rule-tester, @typescript-eslint/type-utils)
+npm warn
+npm warn Could not resolve dependency:
+npm warn peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/utils@8.58.0
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/utils
+npm warn   dev @typescript-eslint/utils@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn   2 more (@typescript-eslint/rule-tester, @typescript-eslint/type-utils)
+npm error Cannot read properties of null (reading 'isDescendantOf')
+npm error A complete log of this run can be found in: /home/runner/.npm/_logs/2026-04-05T06_27_48_575Z-debug-0.log
+0s
+0s
+0s
+0s
+0s
+1s
+0s
+0s
+0s
+0s
+0s

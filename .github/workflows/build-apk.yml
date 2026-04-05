@@ -15,9 +15,11 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
     steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ── 2. Node + pnpm ───────────────────────────────────────────────────
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -28,28 +30,79 @@ jobs:
         with:
           version: 10
 
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
-
       - name: Cache pnpm modules
         uses: actions/cache@v4
         with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          path: ~/.local/share/pnpm/store
           key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-pnpm-
 
-      - name: Install dependencies
+      - name: Install workspace dependencies (pnpm)
         run: pnpm install --frozen-lockfile
 
+      # ── 3. Build web assets ──────────────────────────────────────────────
       - name: Build web app
         run: pnpm --filter @workspace/flex-viewer run build
         env:
           PORT: 3000
-          # For APK the web assets are embedded, so root base path is correct
           BASE_PATH: /
           NODE_ENV: production
 
+      # ── 4. Capacitor setup in an ISOLATED directory ──────────────────────
+      #   The workspace root blocks npm via preinstall hook.
+      #   We run Capacitor entirely outside the workspace in /tmp/cap-build.
+      - name: Create isolated Capacitor workspace
+        run: |
+          mkdir -p /tmp/cap-build
+          cd /tmp/cap-build
+          npm init -y
+
+      - name: Install Capacitor packages (isolated)
+        working-directory: /tmp/cap-build
+        run: npm install @capacitor/cli @capacitor/core @capacitor/android
+
+      - name: Write capacitor.config.json (isolated)
+        run: |
+          node -e "
+          const config = {
+            appId: 'com.flexcilviewer.app',
+            appName: 'Flexcil Viewer',
+            webDir: process.env.GITHUB_WORKSPACE + '/artifacts/flex-viewer/dist/public',
+            bundledWebRuntime: false,
+            server: { androidScheme: 'https' },
+            android: {
+              allowMixedContent: true,
+              backgroundColor: '#f5f6fa',
+              overrideUserAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            },
+            plugins: { SplashScreen: { launchShowDuration: 0 } }
+          };
+          require('fs').writeFileSync(
+            '/tmp/cap-build/capacitor.config.json',
+            JSON.stringify(config, null, 2)
+          );
+          console.log('Config written:', JSON.stringify(config, null, 2));
+          "
+
+      - name: Initialize Capacitor Android project
+        working-directory: /tmp/cap-build
+        run: npx cap add android
+
+      # ── 5. Patch AndroidManifest for storage + download permissions ──────
+      - name: Patch AndroidManifest.xml (storage + download permissions)
+        run: |
+          MANIFEST=/tmp/cap-build/android/app/src/main/AndroidManifest.xml
+          # Insert permissions before <application> tag
+          sed -i 's|<application|<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>\n    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION"/>\n    <application|' "$MANIFEST"
+          echo "--- Patched manifest head ---"
+          head -30 "$MANIFEST"
+
+      # ── 6. Sync web build into Android ───────────────────────────────────
+      - name: Sync web build into Android project
+        working-directory: /tmp/cap-build
+        run: npx cap sync android
+
+      # ── 7. Java + Android SDK ────────────────────────────────────────────
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -60,63 +113,52 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Accept Android SDK licenses
-        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Install Capacitor CLI globally
-        run: npm install -g @capacitor/cli
-
-      - name: Install Capacitor packages in workspace
-        run: npm install @capacitor/core @capacitor/android
-
-      - name: Initialize Capacitor Android project
-        run: |
-          if [ ! -d "android" ]; then
-            npx cap add android
-          fi
-
-      - name: Sync web build into Android project
-        run: npx cap sync android
-
+      # ── 8. Build APK ──────────────────────────────────────────────────────
       - name: Make Gradle wrapper executable
-        run: chmod +x android/gradlew
+        run: chmod +x /tmp/cap-build/android/gradlew
 
       - name: Build Debug APK
-        working-directory: android
+        working-directory: /tmp/cap-build/android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
         env:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
 
+      # ── 9. Upload APK artifact ────────────────────────────────────────────
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: FlexcilViewer-debug-${{ github.sha }}
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: /tmp/cap-build/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 90
 
       # ── OPTIONAL: Signed Release APK ──────────────────────────────────────
-      # To enable, add these secrets in your repo Settings → Secrets:
-      #   KEYSTORE_BASE64   — run: base64 your-key.jks | pbcopy  (Mac) or base64 your-key.jks (Linux)
-      #   KEYSTORE_PASSWORD — your keystore password
-      #   KEY_ALIAS         — your key alias
-      #   KEY_PASSWORD      — your key password
+      # Add these secrets in repo Settings → Secrets and Variables → Actions:
+      #   KEYSTORE_BASE64   — base64-encoded .jks file
+      #   KEYSTORE_PASSWORD — keystore password
+      #   KEY_ALIAS         — key alias
+      #   KEY_PASSWORD      — key password
       #
-      # Then uncomment:
+      # Then uncomment the block below:
+      #
       # - name: Decode keystore
-      #   run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release.jks
+      #   run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > /tmp/cap-build/android/app/release.jks
       #
       # - name: Build Release APK
-      #   working-directory: android
-      #   run: ./gradlew assembleRelease --no-daemon
+      #   working-directory: /tmp/cap-build/android
+      #   run: |
+      #     ./gradlew assembleRelease --no-daemon \
+      #       -Pandroid.injected.signing.store.file=release.jks \
+      #       -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
+      #       -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
+      #       -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
       #   env:
       #     ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
-      #     KEYSTORE_PATH: release.jks
-      #     KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-      #     KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-      #     KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
       #
       # - name: Upload Release APK
       #   uses: actions/upload-artifact@v4
       #   with:
-      #     name: FlexcilViewer-release
-      #     path: android/app/build/outputs/apk/release/app-release.apk
+      #     name: FlexcilViewer-release-${{ github.sha }}
+      #     path: /tmp/cap-build/android/app/build/outputs/apk/release/app-release.apk
       #     retention-days: 90
