@@ -13,6 +13,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -21,6 +23,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -30,60 +34,166 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.flexcilviewer.ui.theme.*
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.pdmodel.PDDocument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
+
+// ── Encryption detection ──────────────────────────────────────────────────────
+
+private fun isPdfEncrypted(bytes: ByteArray): Boolean {
+    // Scan the first 64 KB of the PDF for the /Encrypt dictionary key
+    val sampleSize = minOf(bytes.size, 65536)
+    val sample = String(bytes, 0, sampleSize, Charsets.ISO_8859_1)
+    return sample.contains("/Encrypt")
+}
+
+private fun decryptPdfBytes(context: android.content.Context, bytes: ByteArray, password: String): ByteArray {
+    PDFBoxResourceLoader.init(context)
+    val doc = PDDocument.load(bytes, password)
+    doc.isAllSecurityToBeRemoved = true
+    val out = ByteArrayOutputStream()
+    doc.save(out)
+    doc.close()
+    return out.toByteArray()
+}
+
+// ── Render helper ─────────────────────────────────────────────────────────────
+
+private suspend fun renderPdfBytes(context: android.content.Context, bytes: ByteArray): List<Bitmap> =
+    withContext(Dispatchers.IO) {
+        val tmpFile = File.createTempFile("flex_pdf_", ".pdf", context.cacheDir)
+        try {
+            tmpFile.writeBytes(bytes)
+            val pfd = ParcelFileDescriptor.open(tmpFile, ParcelFileDescriptor.MODE_READ_ONLY)
+            val renderer = PdfRenderer(pfd)
+            val bitmaps = mutableListOf<Bitmap>()
+            for (i in 0 until renderer.pageCount) {
+                val page = renderer.openPage(i)
+                val scale = 2.0f
+                val bmp = Bitmap.createBitmap(
+                    (page.width * scale).toInt(),
+                    (page.height * scale).toInt(),
+                    Bitmap.Config.ARGB_8888
+                )
+                bmp.eraseColor(android.graphics.Color.WHITE)
+                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                page.close()
+                bitmaps.add(bmp)
+            }
+            renderer.close()
+            pfd.close()
+            bitmaps
+        } finally {
+            tmpFile.delete()
+        }
+    }
+
+// ── States ────────────────────────────────────────────────────────────────────
+
+private sealed class PdfState {
+    object Loading : PdfState()
+    data class Ready(val pages: List<Bitmap>) : PdfState()
+    object PasswordNeeded : PdfState()
+    object PasswordWrong : PdfState()
+    data class Error(val message: String) : PdfState()
+}
+
+// ── Main composable ───────────────────────────────────────────────────────────
 
 @Composable
 fun PdfViewer(pdfBytes: ByteArray, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    var pages by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
+
+    var state by remember { mutableStateOf<PdfState>(PdfState.Loading) }
     var globalScale by remember { mutableFloatStateOf(1.2f) }
     var horizontalMode by remember { mutableStateOf(false) }
     var maximized by remember { mutableStateOf(false) }
 
-    LaunchedEffect(pdfBytes) {
-        loading = true
-        error = null
-        try {
-            val result = withContext(Dispatchers.IO) {
-                val tmpFile = File.createTempFile("flex_pdf_", ".pdf", context.cacheDir)
-                tmpFile.writeBytes(pdfBytes)
-                val pfd = ParcelFileDescriptor.open(tmpFile, ParcelFileDescriptor.MODE_READ_ONLY)
-                val renderer = PdfRenderer(pfd)
-                val bitmaps = mutableListOf<Bitmap>()
-                for (i in 0 until renderer.pageCount) {
-                    val page = renderer.openPage(i)
-                    val scale = 2.0f
-                    val bmp = Bitmap.createBitmap(
-                        (page.width * scale).toInt(),
-                        (page.height * scale).toInt(),
-                        Bitmap.Config.ARGB_8888
-                    )
-                    bmp.eraseColor(android.graphics.Color.WHITE)
-                    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                    page.close()
-                    bitmaps.add(bmp)
-                }
-                renderer.close()
-                pfd.close()
-                tmpFile.delete()
-                bitmaps
-            }
-            pages = result
-        } catch (e: Exception) {
-            error = e.message ?: "Failed to render PDF"
-        }
-        loading = false
+    var passwordInput by remember { mutableStateOf("") }
+    var showPasswordText by remember { mutableStateOf(false) }
+    val passwordFocus = remember { FocusRequester() }
+
+    // ── Load / reload with optional password ─────────────────────────────────
+    fun tryLoad(password: String = "") {
+        state = PdfState.Loading
     }
 
-    // Fullscreen dialog
+    LaunchedEffect(pdfBytes) {
+        state = PdfState.Loading
+        passwordInput = ""
+        withContext(Dispatchers.IO) {
+            try {
+                val pages = renderPdfBytes(context, pdfBytes)
+                state = PdfState.Ready(pages)
+            } catch (e: Exception) {
+                state = if (isPdfEncrypted(pdfBytes)) PdfState.PasswordNeeded
+                        else PdfState.Error(e.message ?: "Failed to render PDF")
+            }
+        }
+    }
+
+    // Called when the user submits a password
+    val submitPassword: (String) -> Unit = { pwd ->
+        state = PdfState.Loading
+    }
+
+    LaunchedEffect(state) {
+        // When we flip to Loading *after* PasswordNeeded/PasswordWrong it means
+        // the user just submitted a password — we handle it here via a side channel.
+        // Instead we use a dedicated key below.
+    }
+
+    // Separate effect that fires when the user intentionally submits a password
+    var pendingPassword by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(pendingPassword) {
+        val pwd = pendingPassword ?: return@LaunchedEffect
+        state = PdfState.Loading
+        withContext(Dispatchers.IO) {
+            try {
+                val decrypted = decryptPdfBytes(context, pdfBytes, pwd)
+                val pages = renderPdfBytes(context, decrypted)
+                state = PdfState.Ready(pages)
+                passwordInput = ""
+                pendingPassword = null
+            } catch (e: Exception) {
+                val msg = e.message ?: ""
+                state = if (msg.contains("password", ignoreCase = true) ||
+                           msg.contains("encrypt", ignoreCase = true) ||
+                           msg.contains("decrypt", ignoreCase = true) ||
+                           msg.contains("BadPadding", ignoreCase = true) ||
+                           msg.contains("incorrect", ignoreCase = true)) {
+                    PdfState.PasswordWrong
+                } else {
+                    PdfState.Error(msg.ifBlank { "Failed to decrypt PDF" })
+                }
+                pendingPassword = null
+            }
+        }
+    }
+
+    // Focus password field when needed
+    LaunchedEffect(state) {
+        if (state is PdfState.PasswordNeeded || state is PdfState.PasswordWrong) {
+            kotlinx.coroutines.delay(100)
+            runCatching { passwordFocus.requestFocus() }
+        }
+    }
+
+    // ── Fullscreen dialog ─────────────────────────────────────────────────────
+    val pages = (state as? PdfState.Ready)?.pages ?: emptyList()
+
     if (maximized && pages.isNotEmpty()) {
         Dialog(
             onDismissRequest = { maximized = false },
@@ -105,8 +215,8 @@ fun PdfViewer(pdfBytes: ByteArray, modifier: Modifier = Modifier) {
     }
 
     Box(modifier = modifier.background(BackgroundDark)) {
-        when {
-            loading -> {
+        when (val s = state) {
+            is PdfState.Loading -> {
                 Column(
                     modifier = Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -117,7 +227,25 @@ fun PdfViewer(pdfBytes: ByteArray, modifier: Modifier = Modifier) {
                     Text("Rendering PDF…", color = TextSecondary, style = MaterialTheme.typography.bodyMedium)
                 }
             }
-            error != null -> {
+
+            is PdfState.PasswordNeeded, is PdfState.PasswordWrong -> {
+                val isWrong = s is PdfState.PasswordWrong
+                PasswordPrompt(
+                    isWrongPassword = isWrong,
+                    password = passwordInput,
+                    showPasswordText = showPasswordText,
+                    focusRequester = passwordFocus,
+                    onPasswordChange = { passwordInput = it },
+                    onToggleVisibility = { showPasswordText = !showPasswordText },
+                    onSubmit = {
+                        if (passwordInput.isNotBlank()) {
+                            pendingPassword = passwordInput
+                        }
+                    }
+                )
+            }
+
+            is PdfState.Error -> {
                 Column(
                     modifier = Modifier.fillMaxSize().padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -127,26 +255,13 @@ fun PdfViewer(pdfBytes: ByteArray, modifier: Modifier = Modifier) {
                     Spacer(Modifier.height(12.dp))
                     Text("Unable to render PDF", color = AccentRed, style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
-                    Text(error ?: "", color = TextSecondary, style = MaterialTheme.typography.bodyMedium)
-                    if (error?.contains("password", ignoreCase = true) == true ||
-                        error?.contains("encrypt", ignoreCase = true) == true) {
-                        Spacer(Modifier.height(12.dp))
-                        Surface(color = AccentAmber.copy(alpha = 0.15f), shape = RoundedCornerShape(8.dp)) {
-                            Row(
-                                Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(Icons.Default.Lock, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(16.dp))
-                                Text("This PDF is password-protected.", color = AccentAmber, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
+                    Text(s.message, color = TextSecondary, style = MaterialTheme.typography.bodyMedium)
                 }
             }
-            else -> {
+
+            is PdfState.Ready -> {
                 PdfContent(
-                    pages = pages,
+                    pages = s.pages,
                     globalScale = globalScale,
                     horizontalMode = horizontalMode,
                     onScaleChange = { globalScale = it },
@@ -155,6 +270,124 @@ fun PdfViewer(pdfBytes: ByteArray, modifier: Modifier = Modifier) {
                     isMaximized = false,
                     onToggleMaximize = { maximized = true }
                 )
+            }
+        }
+    }
+}
+
+// ── Password prompt ───────────────────────────────────────────────────────────
+
+@Composable
+private fun PasswordPrompt(
+    isWrongPassword: Boolean,
+    password: String,
+    showPasswordText: Boolean,
+    focusRequester: FocusRequester,
+    onPasswordChange: (String) -> Unit,
+    onToggleVisibility: () -> Unit,
+    onSubmit: () -> Unit
+) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(32.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+            elevation = CardDefaults.cardElevation(8.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Lock icon
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = AccentAmber.copy(alpha = 0.15f),
+                    modifier = Modifier.size(64.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = AccentAmber,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                }
+
+                Text(
+                    "Password Protected",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = TextPrimary
+                )
+
+                Text(
+                    if (isWrongPassword)
+                        "Incorrect password. Please try again."
+                    else
+                        "This PDF is locked. Enter the password to view it.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+
+                // Password input
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                    label = { Text("PDF Password") },
+                    placeholder = { Text("Enter password") },
+                    visualTransformation = if (showPasswordText) VisualTransformation.None
+                                           else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { onSubmit() }),
+                    trailingIcon = {
+                        IconButton(onClick = onToggleVisibility) {
+                            Icon(
+                                if (showPasswordText) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (showPasswordText) "Hide password" else "Show password",
+                                tint = TextMuted
+                            )
+                        }
+                    },
+                    isError = isWrongPassword,
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = PrimaryIndigoLight,
+                        unfocusedBorderColor = DividerColor,
+                        errorBorderColor = AccentRed,
+                        focusedLabelColor = PrimaryIndigoLight,
+                        cursorColor = PrimaryIndigoLight
+                    )
+                )
+
+                if (isWrongPassword) {
+                    Text(
+                        "Wrong password — please try again.",
+                        color = AccentRed,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                Button(
+                    onClick = onSubmit,
+                    enabled = password.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigoLight)
+                ) {
+                    Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Unlock PDF", style = MaterialTheme.typography.labelLarge)
+                }
             }
         }
     }
@@ -181,7 +414,6 @@ private fun PdfContent(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Return / back button when maximized
                 if (isMaximized) {
                     IconButton(onClick = onToggleMaximize, modifier = Modifier.size(36.dp)) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Exit fullscreen", tint = PrimaryIndigoLight, modifier = Modifier.size(20.dp))
@@ -189,7 +421,6 @@ private fun PdfContent(
                     Spacer(Modifier.width(4.dp))
                 }
 
-                // Zoom out
                 IconButton(onClick = { onScaleChange((globalScale - 0.2f).coerceAtLeast(0.5f)) }, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Default.ZoomOut, contentDescription = "Zoom out", tint = TextSecondary, modifier = Modifier.size(20.dp))
                 }
@@ -202,12 +433,10 @@ private fun PdfContent(
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
 
-                // Zoom in
                 IconButton(onClick = { onScaleChange((globalScale + 0.2f).coerceAtMost(4f)) }, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Default.ZoomIn, contentDescription = "Zoom in", tint = TextSecondary, modifier = Modifier.size(20.dp))
                 }
 
-                // Reset zoom
                 IconButton(onClick = { onScaleChange(1.2f) }, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Default.RestartAlt, contentDescription = "Reset zoom", tint = TextMuted, modifier = Modifier.size(18.dp))
                 }
@@ -222,7 +451,6 @@ private fun PdfContent(
 
                 Spacer(Modifier.width(4.dp))
 
-                // Horizontal/vertical toggle
                 IconButton(onClick = { onHorizontalToggle(!horizontalMode) }, modifier = Modifier.size(36.dp)) {
                     Icon(
                         if (horizontalMode) Icons.Default.SwapVert else Icons.Default.SwapHoriz,
@@ -232,7 +460,6 @@ private fun PdfContent(
                     )
                 }
 
-                // Maximize / restore button
                 IconButton(onClick = onToggleMaximize, modifier = Modifier.size(36.dp)) {
                     Icon(
                         if (isMaximized) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
@@ -273,7 +500,6 @@ private fun VerticalPdfPages(pages: List<Bitmap>, globalScale: Float) {
             }
         }
 
-        // Wider scrollbar track + thumb
         if (pages.size > 1) {
             Box(
                 modifier = Modifier
@@ -282,12 +508,7 @@ private fun VerticalPdfPages(pages: List<Bitmap>, globalScale: Float) {
                     .width(12.dp)
                     .padding(vertical = 8.dp, horizontal = 2.dp)
                     .drawWithContent {
-                        // Track
-                        drawRoundRect(
-                            color = SurfaceVariantDark,
-                            cornerRadius = CornerRadius(6f)
-                        )
-                        // Thumb
+                        drawRoundRect(color = SurfaceVariantDark, cornerRadius = CornerRadius(6f))
                         val totalItems = listState.layoutInfo.totalItemsCount.takeIf { it > 0 } ?: return@drawWithContent
                         val visibleItems = listState.layoutInfo.visibleItemsInfo
                         if (visibleItems.isEmpty()) return@drawWithContent
@@ -306,7 +527,6 @@ private fun VerticalPdfPages(pages: List<Bitmap>, globalScale: Float) {
             )
         }
 
-        // Page counter pill
         val currentPage by remember { derivedStateOf { (listState.firstVisibleItemIndex + 1).coerceIn(1, pages.size) } }
         Surface(
             color = BackgroundDark.copy(alpha = 0.80f),
@@ -339,7 +559,6 @@ private fun HorizontalPdfPages(pages: List<Bitmap>, globalScale: Float) {
             PdfPageItem(bitmap = pages[index], pageNumber = index + 1, total = pages.size, globalScale = globalScale)
         }
 
-        // Page counter pill
         Surface(
             color = BackgroundDark.copy(alpha = 0.80f),
             shape = RoundedCornerShape(12.dp),
@@ -353,7 +572,6 @@ private fun HorizontalPdfPages(pages: List<Bitmap>, globalScale: Float) {
             )
         }
 
-        // Dot indicators for small page counts
         if (pages.size in 2..10) {
             Row(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp),

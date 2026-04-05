@@ -28,8 +28,7 @@ data class FlexDocument(
     val flxSize: Long,
     val info: FlxDocInfo? = null,
     val thumbnail: ByteArray? = null,
-    /** Path to a temp file containing the extracted PDF, or null if no PDF in this doc. */
-    val pdfFilePath: String? = null,
+    val pdfData: ByteArray? = null,
     val pageCount: Int = 0,
     val pages: List<PageInfo> = emptyList(),
     val annotationFileCount: Int = 0,

@@ -6,9 +6,7 @@ import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
+import java.io.InputStream
 import java.util.zip.ZipInputStream
 
 private val gson = Gson()
@@ -44,6 +42,7 @@ private data class RawAttachmentPage(
 )
 
 private data class RawPageEntry(
+    @SerializedName("attachmentPage") val attachmentPage: RawAttachmentPage? = null,
     @SerializedName("index") val index: Int? = null,
     @SerializedName("width") val width: Double? = null,
     @SerializedName("pageWidth") val pageWidth: Double? = null,
@@ -53,8 +52,7 @@ private data class RawPageEntry(
     @SerializedName("rotate") val rotate: Int? = null,
     @SerializedName("pdfPageIndex") val pdfPageIndex: Int? = null,
     @SerializedName("attachmentPageIndex") val attachmentPageIndex: Int? = null,
-    @SerializedName("pageIndex") val pageIndex: Int? = null,
-    @SerializedName("attachmentPage") val attachmentPage: RawAttachmentPage? = null
+    @SerializedName("pageIndex") val pageIndex: Int? = null
 )
 
 private fun RawPageEntry.toPageInfo(fallbackIndex: Int): PageInfo {
@@ -68,35 +66,38 @@ private fun RawPageEntry.toPageInfo(fallbackIndex: Int): PageInfo {
     return PageInfo(index = idx, width = w, height = h, rotation = rot, pdfPage = pdfIdx)
 }
 
-/** Buffer size for streaming large ZIP entries. */
-private const val STREAM_BUF = 64 * 1024 // 64 KB
-
 /**
- * Parse a .flex backup file.
- *
- * PDFs are streamed directly to temp files in [context.cacheDir] — never fully loaded into RAM.
- * Call [cleanupTempPdfs] (or delete files in [FlexBackup] via ViewModel) when done.
+ * Wraps an InputStream and swallows close() calls so the underlying stream
+ * is not closed when a nested ZipInputStream finishes processing one entry.
  */
+private class NonClosingInputStream(private val wrapped: InputStream) : InputStream() {
+    override fun read(): Int = wrapped.read()
+    override fun read(b: ByteArray, off: Int, len: Int): Int = wrapped.read(b, off, len)
+    override fun available(): Int = wrapped.available()
+    override fun close() { /* intentionally a no-op */ }
+}
+
 suspend fun parseFlexFile(context: Context, uri: Uri): FlexBackup = withContext(Dispatchers.IO) {
     var backupInfo = FlexBackupInfo()
     val rootFolders = mutableListOf<FolderNode>()
 
     val inputStream = if (uri.scheme == "file") {
-        FileInputStream(File(uri.path ?: throw IllegalStateException("Invalid file path")))
+        java.io.FileInputStream(java.io.File(uri.path ?: throw IllegalStateException("Invalid file path")))
     } else {
         context.contentResolver.openInputStream(uri)
             ?: throw IllegalStateException("Cannot open file")
     }
 
-    ZipInputStream(inputStream.buffered(STREAM_BUF)).use { outerZip ->
+    // Use a 256 KB buffer on the outer ZIP to reduce read syscalls for large files
+    ZipInputStream(inputStream.buffered(256 * 1024)).use { outerZip ->
         var entry = outerZip.nextEntry
         while (entry != null) {
             val entryName = entry.name
 
             when {
                 entryName == "flexcilbackup/info" -> {
+                    val bytes = outerZip.readBytes()
                     try {
-                        val bytes = outerZip.readBytes()
                         val raw = gson.fromJson(String(bytes, Charsets.UTF_8), RawBackupInfo::class.java)
                         backupInfo = FlexBackupInfo(
                             appName = raw.appName ?: "Flexcil",
@@ -113,19 +114,20 @@ suspend fun parseFlexFile(context: Context, uri: Uri): FlexBackup = withContext(
                         val folderParts = parts.subList(2, parts.size - 1)
                         val fileName = parts.last().removeSuffix(".flx")
                         if (folderParts.isNotEmpty()) {
-                            // ── Stream the .flx entry to a temp file (no full ByteArray) ──
-                            val flxTemp = File.createTempFile("flx_entry_", ".flx", context.cacheDir)
-                            try {
-                                FileOutputStream(flxTemp).use { out -> outerZip.copyTo(out, STREAM_BUF) }
-                                val leafFolder = ensureNestedFolder(rootFolders, folderParts)
-                                val doc = parseFlxDoc(fileName, flxTemp, context.cacheDir)
-                                leafFolder.documents.add(doc)
-                            } finally {
-                                flxTemp.delete() // temp outer entry no longer needed
-                            }
+                            val leafFolder = ensureNestedFolder(rootFolders, folderParts)
+                            // Stream directly from the outer ZIP entry instead of loading
+                            // the entire .flx into memory — critical for large backup files.
+                            val doc = parseFlxDocFromStream(fileName, outerZip)
+                            leafFolder.documents.add(doc)
+                        } else {
+                            outerZip.skip(Long.MAX_VALUE)
                         }
+                    } else {
+                        outerZip.skip(Long.MAX_VALUE)
                     }
                 }
+
+                else -> outerZip.skip(Long.MAX_VALUE)
             }
 
             outerZip.closeEntry()
@@ -158,29 +160,31 @@ private fun ensureNestedFolder(roots: MutableList<FolderNode>, parts: List<Strin
 }
 
 /**
- * Parse a single .flx document (itself a ZIP), streaming the PDF to a temp file.
- * The returned [FlexDocument.pdfFilePath] points to a temp file that the caller must eventually delete.
+ * Parses a .flx document by streaming directly from [parentStream].
+ * Uses a NonClosingInputStream wrapper so the parent ZIP is not closed.
  */
-private fun parseFlxDoc(name: String, flxFile: File, cacheDir: File): FlexDocument {
+private fun parseFlxDocFromStream(name: String, parentStream: InputStream): FlexDocument {
     var info: FlxDocInfo? = null
     var thumbnail: ByteArray? = null
-    var pdfFilePath: String? = null
+    var pdfData: ByteArray? = null
     var pages = emptyList<PageInfo>()
     var pageCount = 0
     var annotationFileCount = 0
     var strokeFileCount = 0
     var highlightFileCount = 0
-    val flxSize = flxFile.length()
 
     try {
-        ZipInputStream(FileInputStream(flxFile).buffered(STREAM_BUF)).use { inner ->
+        ZipInputStream(NonClosingInputStream(parentStream)).use { inner ->
             var entry = inner.nextEntry
             while (entry != null) {
                 val n = entry.name
                 when {
                     n == "info" -> {
                         try {
-                            val raw = gson.fromJson(String(inner.readBytes(), Charsets.UTF_8), RawDocInfo::class.java)
+                            val raw = gson.fromJson(
+                                String(inner.readBytes(), Charsets.UTF_8),
+                                RawDocInfo::class.java
+                            )
                             info = FlxDocInfo(
                                 name = raw.name ?: name,
                                 createDate = raw.createDate?.toLong() ?: 0L,
@@ -193,14 +197,10 @@ private fun parseFlxDoc(name: String, flxFile: File, cacheDir: File): FlexDocume
                         } catch (_: Exception) {}
                     }
                     n == "thumbnail" || n == "thumbnail@2x" -> {
-                        // Thumbnails are small (< 1 MB typically) — safe to keep in RAM
                         if (thumbnail == null) thumbnail = inner.readBytes()
                     }
                     n.startsWith("attachment/PDF/") -> {
-                        // ── Stream PDF directly to temp file — never into RAM ──
-                        val pdfTemp = File.createTempFile("flex_pdf_", ".pdf", cacheDir)
-                        FileOutputStream(pdfTemp).use { out -> inner.copyTo(out, STREAM_BUF) }
-                        pdfFilePath = pdfTemp.absolutePath
+                        pdfData = inner.readBytes()
                     }
                     n == "pages.index" -> {
                         try {
@@ -210,9 +210,18 @@ private fun parseFlxDoc(name: String, flxFile: File, cacheDir: File): FlexDocume
                             pageCount = pages.size
                         } catch (_: Exception) { inner.skip(Long.MAX_VALUE) }
                     }
-                    n.endsWith(".drawings") -> { strokeFileCount++; inner.skip(Long.MAX_VALUE) }
-                    n.endsWith(".annotations") -> { annotationFileCount++; inner.skip(Long.MAX_VALUE) }
-                    n.endsWith(".highlights") -> { highlightFileCount++; inner.skip(Long.MAX_VALUE) }
+                    n.endsWith(".drawings") -> {
+                        strokeFileCount++
+                        inner.skip(Long.MAX_VALUE)
+                    }
+                    n.endsWith(".annotations") -> {
+                        annotationFileCount++
+                        inner.skip(Long.MAX_VALUE)
+                    }
+                    n.endsWith(".highlights") -> {
+                        highlightFileCount++
+                        inner.skip(Long.MAX_VALUE)
+                    }
                     else -> inner.skip(Long.MAX_VALUE)
                 }
                 inner.closeEntry()
@@ -223,10 +232,10 @@ private fun parseFlxDoc(name: String, flxFile: File, cacheDir: File): FlexDocume
 
     return FlexDocument(
         name = info?.name?.takeIf { it.isNotBlank() } ?: name,
-        flxSize = flxSize,
+        flxSize = pdfData?.size?.toLong() ?: 0L,
         info = info,
         thumbnail = thumbnail,
-        pdfFilePath = pdfFilePath,
+        pdfData = pdfData,
         pageCount = pageCount,
         pages = pages,
         annotationFileCount = annotationFileCount,
@@ -246,17 +255,16 @@ private fun sortTree(folders: MutableList<FolderNode>) {
 private fun countDocuments(folders: List<FolderNode>): Int =
     folders.sumOf { it.documents.size + countDocuments(it.subfolders) }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
 // Apple Core Data epoch (NSDate) is seconds since 2001-01-01 UTC
 // Unix epoch is seconds since 1970-01-01 UTC; difference = 978307200 s
 private const val APPLE_EPOCH_OFFSET_S = 978_307_200L
 
 fun formatDate(timestamp: Long): String {
     if (timestamp == 0L) return "Unknown"
+    // If already in milliseconds (> year 2001 in ms)
     val unixMs: Long = when {
-        timestamp > 1_000_000_000_000L -> timestamp           // already ms
-        timestamp > 1_000_000_000L    -> timestamp * 1000L   // Unix seconds (year 2001+)
+        timestamp > 1_000_000_000_000L -> timestamp          // already ms
+        timestamp > 1_000_000_000L    -> timestamp * 1000L  // Unix seconds (year 2001+)
         else                          -> (timestamp + APPLE_EPOCH_OFFSET_S) * 1000L // Apple epoch seconds
     }
     val sdf = java.text.SimpleDateFormat("dd MMM yyyy, hh:mm a", java.util.Locale.getDefault())
@@ -268,6 +276,3 @@ fun formatFileSize(bytes: Long): String = when {
     bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
     else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
 }
-
-fun friendlyPath(path: String): String =
-    path.trimStart('/').replace('/', " › ").ifBlank { "Root" }

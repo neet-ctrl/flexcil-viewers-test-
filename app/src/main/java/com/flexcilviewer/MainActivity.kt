@@ -25,6 +25,7 @@ import com.flexcilviewer.ui.theme.TextPrimary
 import com.flexcilviewer.ui.theme.TextSecondary
 import com.flexcilviewer.viewmodel.FlexViewModel
 import com.flexcilviewer.viewmodel.ParseState
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 
 class MainActivity : ComponentActivity() {
 
@@ -32,6 +33,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PDFBoxResourceLoader.init(applicationContext)
         enableEdgeToEdge()
 
         // Handle file opened externally (e.g. from Files app)

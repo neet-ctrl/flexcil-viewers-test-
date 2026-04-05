@@ -63,5 +63,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.appcompat)
+    implementation(libs.pdfbox.android)
     debugImplementation(libs.androidx.ui.tooling)
 }
