@@ -76,6 +76,6 @@
   },
   "dependencies": {
     "fflate": "^0.8.2",
-    "pdfjs-dist": "^5.6.205"
+    "pdfjs-dist": "4.10.38"
   }
 }

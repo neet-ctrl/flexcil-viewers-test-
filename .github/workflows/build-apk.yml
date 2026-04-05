@@ -95,6 +95,13 @@ jobs:
           sed -i 's|<application|<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application|' "$MANIFEST"
           head -30 "$MANIFEST"
 
+      - name: Patch viewport for desktop mode in Android build
+        run: |
+          sed -i 's|<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5" />|<meta name="viewport" content="width=1280, initial-scale=1.0" />|' \
+            "$GITHUB_WORKSPACE/artifacts/flex-viewer/dist/public/index.html"
+          echo "Viewport patched:"
+          grep -o 'content="[^"]*"' "$GITHUB_WORKSPACE/artifacts/flex-viewer/dist/public/index.html" | head -5
+
       - name: Sync web build into Android project
         working-directory: /tmp/cap-build
         run: npx cap sync android
