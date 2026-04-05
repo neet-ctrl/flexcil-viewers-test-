@@ -42,7 +42,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.flexcilviewer.ui.theme.*
-import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -59,7 +58,6 @@ private fun isPdfEncrypted(bytes: ByteArray): Boolean {
 }
 
 private fun decryptPdfBytes(context: android.content.Context, bytes: ByteArray, password: String): ByteArray {
-    PDFBoxResourceLoader.init(context)
     val doc = PDDocument.load(bytes, password)
     doc.isAllSecurityToBeRemoved = true
     val out = ByteArrayOutputStream()
