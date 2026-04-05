@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Flexcil Backup Viewer"
+version = "1.0.0"
+id = "artifacts/flex-viewer"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18120
+
+[services.development]
+run = "pnpm --filter @workspace/flex-viewer run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/flex-viewer", "run", "build" ]
+publicDir = "artifacts/flex-viewer/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18120"
+BASE_PATH = "/"
