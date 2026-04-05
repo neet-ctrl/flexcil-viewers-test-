@@ -8,6 +8,7 @@ on:
       - 'gradle/**'
       - '*.gradle.kts'
       - 'settings.gradle.kts'
+      - 'gradle.properties'
       - '.github/workflows/build-native-android.yml'
   workflow_dispatch:
     inputs:
