@@ -41,7 +41,11 @@ jobs:
       - name: Build web app
         run: pnpm --filter @workspace/flex-viewer run build
         env:
-          BASE_PATH: /
+          PORT: 3000
+          # For GitHub Pages the base path must match your repo name.
+          # e.g. if your repo is github.com/you/flexcil-viewer → BASE_PATH=/ flexcil-viewer/
+          # This uses the actual repo name automatically:
+          BASE_PATH: /${{ github.event.repository.name }}/
           NODE_ENV: production
 
       - name: Upload web build artifact
