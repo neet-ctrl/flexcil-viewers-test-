@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -20,11 +22,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.flexcilviewer.data.FlexDocument
 import com.flexcilviewer.data.FolderNode
+import com.flexcilviewer.data.getAllDocuments
 import com.flexcilviewer.data.formatDate
 import com.flexcilviewer.data.formatFileSize
 import com.flexcilviewer.ui.theme.*
@@ -35,6 +40,8 @@ fun SidebarContent(
     selectedDoc: FlexDocument?,
     selectedFolder: FolderNode?,
     checkedDocs: Set<String>,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
     onDocClick: (FlexDocument) -> Unit,
     onFolderClick: (FolderNode) -> Unit,
     onCheckToggle: (String) -> Unit,
@@ -43,6 +50,15 @@ fun SidebarContent(
     onExportSelected: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    val searchResults: List<Pair<FlexDocument, String>> = remember(searchQuery, folders) {
+        if (searchQuery.isBlank()) emptyList()
+        else getAllDocuments(folders).filter { (doc, _) ->
+            doc.name.contains(searchQuery, ignoreCase = true)
+        }
+    }
+
     Column(modifier = modifier.background(SurfaceDark)) {
         // Header
         Surface(color = CardDark, modifier = Modifier.fillMaxWidth()) {
@@ -52,7 +68,12 @@ fun SidebarContent(
             ) {
                 Icon(Icons.Default.FolderOpen, contentDescription = null, tint = PrimaryIndigoLight, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Folders", style = MaterialTheme.typography.titleMedium, color = TextPrimary, modifier = Modifier.weight(1f))
+                Text(
+                    "Folders",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = TextPrimary,
+                    modifier = Modifier.weight(1f)
+                )
                 if (checkedDocs.isNotEmpty()) {
                     TextButton(onClick = onDeselectAll, contentPadding = PaddingValues(horizontal = 4.dp)) {
                         Text("Clear ${checkedDocs.size}", color = TextSecondary, style = MaterialTheme.typography.labelSmall)
@@ -60,6 +81,38 @@ fun SidebarContent(
                 }
             }
         }
+
+        // Search bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = onSearchQueryChange,
+            placeholder = { Text("Search documents…", style = MaterialTheme.typography.bodyMedium, color = TextMuted) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextMuted, modifier = Modifier.size(18.dp)) },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { onSearchQueryChange("") }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Clear search", tint = TextMuted, modifier = Modifier.size(18.dp))
+                    }
+                }
+            },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() }),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = TextPrimary,
+                unfocusedTextColor = TextPrimary,
+                cursorColor = PrimaryIndigoLight,
+                focusedBorderColor = PrimaryIndigo,
+                unfocusedBorderColor = DividerColor,
+                focusedContainerColor = SurfaceVariantDark,
+                unfocusedContainerColor = SurfaceVariantDark
+            ),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            textStyle = MaterialTheme.typography.bodyMedium
+        )
 
         if (checkedDocs.isNotEmpty()) {
             Surface(color = PrimaryIndigoDark.copy(alpha = 0.3f), modifier = Modifier.fillMaxWidth()) {
@@ -84,20 +137,55 @@ fun SidebarContent(
 
         HorizontalDivider(color = DividerColor)
 
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            for (folder in folders) {
-                item(key = folder.fullPath) {
-                    FolderNode(
-                        folder = folder,
-                        depth = 0,
-                        selectedDoc = selectedDoc,
-                        selectedFolder = selectedFolder,
-                        checkedDocs = checkedDocs,
-                        onDocClick = onDocClick,
-                        onFolderClick = onFolderClick,
-                        onCheckToggle = onCheckToggle,
-                        onCheckAll = onCheckAll
-                    )
+        if (searchQuery.isNotBlank()) {
+            // Search results — flat list
+            if (searchResults.isEmpty()) {
+                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.SearchOff, contentDescription = null, tint = TextMuted, modifier = Modifier.size(32.dp))
+                        Spacer(Modifier.height(8.dp))
+                        Text("No results for "$searchQuery"", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            } else {
+                Text(
+                    "${searchResults.size} result${if (searchResults.size != 1) "s" else ""}",
+                    color = TextMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                )
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(searchResults, key = { (doc, path) -> "$path/${doc.name}" }) { (doc, path) ->
+                        DocumentRow(
+                            doc = doc,
+                            folderPath = path,
+                            indent = 12.dp,
+                            isSelected = selectedDoc?.name == doc.name,
+                            isChecked = "$path/${doc.name}" in checkedDocs,
+                            onDocClick = onDocClick,
+                            onCheckToggle = { onCheckToggle("$path/${doc.name}") }
+                        )
+                        HorizontalDivider(color = DividerColor, thickness = 0.5.dp)
+                    }
+                }
+            }
+        } else {
+            // Normal tree view
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                for (folder in folders) {
+                    item(key = folder.fullPath) {
+                        FolderTreeNode(
+                            folder = folder,
+                            depth = 0,
+                            selectedDoc = selectedDoc,
+                            selectedFolder = selectedFolder,
+                            checkedDocs = checkedDocs,
+                            onDocClick = onDocClick,
+                            onFolderClick = onFolderClick,
+                            onCheckToggle = onCheckToggle,
+                            onCheckAll = onCheckAll
+                        )
+                    }
                 }
             }
         }
@@ -105,7 +193,7 @@ fun SidebarContent(
 }
 
 @Composable
-private fun FolderNode(
+private fun FolderTreeNode(
     folder: FolderNode,
     depth: Int,
     selectedDoc: FlexDocument?,
@@ -128,8 +216,7 @@ private fun FolderNode(
                 onFolderClick(folder)
             }
             .background(
-                if (selectedFolder?.fullPath == folder.fullPath)
-                    SelectedBg else SurfaceDark
+                if (selectedFolder?.fullPath == folder.fullPath) SelectedBg else SurfaceDark
             )
             .padding(start = 8.dp + indent, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -149,7 +236,13 @@ private fun FolderNode(
         )
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            Text(folder.name, style = MaterialTheme.typography.bodyMedium, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                folder.name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             Text(
                 "${folder.totalDocuments} docs",
                 style = MaterialTheme.typography.labelSmall,
@@ -167,9 +260,8 @@ private fun FolderNode(
         exit = shrinkVertically()
     ) {
         Column {
-            // Sub-folders
             for (sub in folder.subfolders) {
-                FolderNode(
+                FolderTreeNode(
                     folder = sub,
                     depth = depth + 1,
                     selectedDoc = selectedDoc,
@@ -181,7 +273,6 @@ private fun FolderNode(
                     onCheckAll = onCheckAll
                 )
             }
-            // Documents
             for (doc in folder.documents) {
                 DocumentRow(
                     doc = doc,
@@ -233,7 +324,6 @@ private fun DocumentRow(
         )
         Spacer(Modifier.width(8.dp))
 
-        // Thumbnail or icon
         if (thumbBitmap != null) {
             Image(
                 bitmap = thumbBitmap.asImageBitmap(),
@@ -266,7 +356,7 @@ private fun DocumentRow(
             Text(
                 doc.name,
                 style = MaterialTheme.typography.bodyMedium,
-                color = if (isSelected) TextPrimary else TextPrimary.copy(alpha = 0.9f),
+                color = TextPrimary.copy(alpha = if (isSelected) 1f else 0.9f),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )

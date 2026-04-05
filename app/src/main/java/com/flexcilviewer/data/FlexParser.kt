@@ -106,6 +106,9 @@ private fun parseFlxDoc(name: String, bytes: ByteArray): FlexDocument {
     var thumbnail: ByteArray? = null
     var pdfData: ByteArray? = null
     var pageCount = 0
+    var annotationFileCount = 0
+    var strokeFileCount = 0
+    var highlightFileCount = 0
 
     try {
         ZipInputStream(ByteArrayInputStream(bytes)).use { inner ->
@@ -136,7 +139,19 @@ private fun parseFlxDoc(name: String, bytes: ByteArray): FlexDocument {
                             val pagesJson = String(inner.readBytes(), Charsets.UTF_8)
                             val pages = gson.fromJson(pagesJson, Array<RawPageInfo>::class.java)
                             pageCount = pages.size
-                        } catch (_: Exception) {}
+                        } catch (_: Exception) { inner.skip(Long.MAX_VALUE) }
+                    }
+                    n.endsWith(".drawings") -> {
+                        strokeFileCount++
+                        inner.skip(Long.MAX_VALUE)
+                    }
+                    n.endsWith(".annotations") -> {
+                        annotationFileCount++
+                        inner.skip(Long.MAX_VALUE)
+                    }
+                    n.endsWith(".highlights") -> {
+                        highlightFileCount++
+                        inner.skip(Long.MAX_VALUE)
                     }
                     else -> inner.skip(Long.MAX_VALUE)
                 }
@@ -152,7 +167,10 @@ private fun parseFlxDoc(name: String, bytes: ByteArray): FlexDocument {
         info = info,
         thumbnail = thumbnail,
         pdfData = pdfData,
-        pageCount = pageCount
+        pageCount = pageCount,
+        annotationFileCount = annotationFileCount,
+        strokeFileCount = strokeFileCount,
+        highlightFileCount = highlightFileCount
     )
 }
 

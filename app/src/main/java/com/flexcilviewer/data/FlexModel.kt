@@ -21,7 +21,10 @@ data class FlexDocument(
     val info: FlxDocInfo? = null,
     val thumbnail: ByteArray? = null,
     val pdfData: ByteArray? = null,
-    val pageCount: Int = 0
+    val pageCount: Int = 0,
+    val annotationFileCount: Int = 0,
+    val strokeFileCount: Int = 0,
+    val highlightFileCount: Int = 0
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

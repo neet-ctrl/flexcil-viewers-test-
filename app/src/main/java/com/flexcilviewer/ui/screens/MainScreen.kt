@@ -43,6 +43,7 @@ fun MainScreen(
     val selectedFolder by viewModel.selectedFolder.collectAsState()
     val checkedDocs by viewModel.checkedDocs.collectAsState()
     val exportState by viewModel.exportState.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
 
     var showExportDialog by remember { mutableStateOf(false) }
     var exportTarget by remember { mutableStateOf<List<Pair<FlexDocument, String>>>(emptyList()) }
@@ -78,6 +79,8 @@ fun MainScreen(
                     selectedDoc = selectedDoc,
                     selectedFolder = selectedFolder,
                     checkedDocs = checkedDocs,
+                    searchQuery = searchQuery,
+                    onSearchQueryChange = { viewModel.setSearchQuery(it) },
                     onDocClick = { doc ->
                         viewModel.selectDocument(doc)
                         scope.launch { drawerState.close() }

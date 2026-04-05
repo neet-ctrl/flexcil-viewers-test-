@@ -45,6 +45,11 @@ class FlexViewModel(application: Application) : AndroidViewModel(application) {
     private val _exportState = MutableStateFlow<ExportState>(ExportState.Idle)
     val exportState: StateFlow<ExportState> = _exportState.asStateFlow()
 
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    fun setSearchQuery(q: String) { _searchQuery.value = q }
+
     fun openFile(context: Context, uri: Uri) {
         viewModelScope.launch {
             _parseState.value = ParseState.Loading("Reading file…")
