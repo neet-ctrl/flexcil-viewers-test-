@@ -3,15 +3,18 @@ import { UploadZone } from '@/components/UploadZone';
 import { Sidebar } from '@/components/Sidebar';
 import { DocumentViewer } from '@/components/DocumentViewer';
 import { WelcomePane } from '@/components/WelcomePane';
+import { ExportBar } from '@/components/ExportBar';
+import { ThemeProvider } from '@/lib/theme';
 import type { FlexBackup, FlexDocument } from '@/lib/flexcil-parser';
 import { parseFlexFile } from '@/lib/flexcil-parser';
 
-function App() {
+function AppInner() {
   const [backup, setBackup] = useState<FlexBackup | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<FlexDocument | null>(null);
   const [selectedFolder, setSelectedFolder] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [checkedDocs, setCheckedDocs] = useState<Map<string, { doc: FlexDocument; folderName: string }>>(new Map());
 
   const handleFile = useCallback(async (file: File) => {
     if (!file.name.endsWith('.flex') && !file.name.endsWith('.zip')) {
@@ -22,6 +25,7 @@ function App() {
     setError(null);
     setSelectedDoc(null);
     setSelectedFolder('');
+    setCheckedDocs(new Map());
 
     try {
       const result = await parseFlexFile(file);
@@ -43,11 +47,39 @@ function App() {
     setSelectedDoc(null);
     setSelectedFolder('');
     setError(null);
+    setCheckedDocs(new Map());
+  }, []);
+
+  const handleToggleCheck = useCallback((key: string, doc: FlexDocument, folderName: string) => {
+    setCheckedDocs((prev) => {
+      const next = new Map(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.set(key, { doc, folderName });
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleFolderCheck = useCallback((folderName: string, docs: FlexDocument[]) => {
+    setCheckedDocs((prev) => {
+      const next = new Map(prev);
+      const allChecked = docs.every((d) => next.has(folderName + '/' + d.name));
+      if (allChecked) {
+        docs.forEach((d) => next.delete(folderName + '/' + d.name));
+      } else {
+        docs.forEach((d) => next.set(folderName + '/' + d.name, { doc: d, folderName }));
+      }
+      return next;
+    });
   }, []);
 
   if (!backup) {
     return <UploadZone onFile={handleFile} loading={loading} error={error} />;
   }
+
+  const hasExportBar = checkedDocs.size > 0;
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -56,15 +88,31 @@ function App() {
         selectedDoc={selectedDoc}
         onSelectDoc={handleSelectDoc}
         onReset={handleReset}
+        checkedDocs={checkedDocs}
+        onToggleCheck={handleToggleCheck}
+        onToggleFolderCheck={handleToggleFolderCheck}
       />
-      <main className="flex-1 overflow-hidden">
+      <main className={`flex-1 overflow-hidden ${hasExportBar ? 'pb-14' : ''}`}>
         {selectedDoc ? (
           <DocumentViewer doc={selectedDoc} folderName={selectedFolder} />
         ) : (
           <WelcomePane backup={backup} />
         )}
       </main>
+      <ExportBar
+        selected={checkedDocs}
+        onClearSelection={() => setCheckedDocs(new Map())}
+        backupName={backup.info.appName || 'flexcil'}
+      />
     </div>
+  );
+}
+
+function App() {
+  return (
+    <ThemeProvider>
+      <AppInner />
+    </ThemeProvider>
   );
 }
 

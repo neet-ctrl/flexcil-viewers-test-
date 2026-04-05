@@ -1,0 +1,26 @@
+{
+  "name": "Flexcil Backup Viewer",
+  "short_name": "FlexViewer",
+  "description": "Universal viewer for Flexcil .flex backup files — browse, view PDFs, and export your documents",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f6fa",
+  "theme_color": "#3b6ef8",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "screenshots": []
+}

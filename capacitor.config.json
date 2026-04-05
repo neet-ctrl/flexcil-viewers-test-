@@ -1,0 +1,18 @@
+{
+  "appId": "com.flexcilviewer.app",
+  "appName": "Flexcil Viewer",
+  "webDir": "artifacts/flex-viewer/dist/public",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#f5f6fa"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  }
+}
